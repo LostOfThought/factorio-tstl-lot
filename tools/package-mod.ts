@@ -514,18 +514,26 @@ async function main() {
 
           // Push the commit
           console.log(`Pushing commit for version ${versionToUse}...`);
-          execSync(`git push`);
+          execSync(`git push -u origin HEAD`);
           console.log(`Pushed commit for version ${versionToUse}.`);
 
         } catch (gitError: unknown) { 
           let errorMessage = "An unknown error occurred during git operation.";
+          let specificErrorType = "general"; // To track if it's commit or push
+
           if (gitError instanceof Error) {
             errorMessage = gitError.message;
+            // Try to infer the type of git error from the message
+            if (errorMessage.toLowerCase().includes("commit")) {
+                specificErrorType = "commit";
+            } else if (errorMessage.toLowerCase().includes("push")) {
+                specificErrorType = "push";
+            }
           }
-          // Distinguish between commit and push error if possible, though execSync output might be generic
-          if (gitError.message.includes("commit")) {
+          
+          if (specificErrorType === "commit") {
              console.error(`ERROR: Failed to commit package.json version update. ${errorMessage}`);
-          } else if (gitError.message.includes("push")) {
+          } else if (specificErrorType === "push") {
              console.error(`ERROR: Failed to push version update commit. ${errorMessage}`);
           } else {
              console.error(`ERROR: Git operation failed. ${errorMessage}`);
