@@ -184,9 +184,10 @@ function countWorkCommitsSince(commitHash: string): number {
   }
 }
 
-// --- Changelog Generation with Conventional Commits ---
+// --- Cumulative Changelog Generation --- //
 
 const conventionalCommitRegex = /^(\w+)(?:\(([^\)]+)\))?(!?): (.*)$/;
+const versionCommitRegex = /^chore: Update version to (\d+\.\d+\.\d+)$/;
 
 const factorioCategoryOrder: string[] = [
   "Major Features", "Features", "Minor Features", "Graphics", "Sounds",
@@ -199,37 +200,25 @@ const commitTypeToFactorioCategory: { [key: string]: string } = {
   feat: "Features",
   fix: "Bugfixes",
   perf: "Optimizations",
-  docs: "Info", // Or "Changes"
-  style: "Changes", // Or could be ignored if not user-facing
-  refactor: "Changes", // Or "Modding" / "Scripting"
-  test: "Changes",   // Or could be ignored
-  chore: "Changes",  // Or could be ignored
-  build: "Changes",  // Or "Modding"
-  ci: "Changes",     // Or could be ignored
+  docs: "Info",
+  style: "Changes",
+  refactor: "Changes",
+  test: "Changes",
+  chore: "Changes", // Default, but version bumps are handled separately
+  build: "Changes",
+  ci: "Changes",
   revert: "Changes",
-  // You can add more mappings here
 };
 
-function getChangelog(baseCommitHash: string | null, currentModVersion: string): string {
-  let gitLogCommand = "";
+// Parses commits in a given range and returns categorized entries
+function getCategorizedEntries(commitRange: string): { [category: string]: { scope?: string; message: string; body: string }[] } {
   const commitSeparator = "----GIT_COMMIT_SEPARATOR----";
   const fieldSeparator = "----GIT_FIELD_SEPARATOR----";
-  // We need subject (%s) and body (%b)
   const gitLogFormat = `--pretty=format:%s${fieldSeparator}%b${commitSeparator}`;
-
-  if (baseCommitHash) {
-    const commitsSinceBase = countWorkCommitsSince(baseCommitHash);
-    if (commitsSinceBase === 0) {
-      gitLogCommand = `git log -1 ${gitLogFormat} ${baseCommitHash}`;
-    } else {
-      gitLogCommand = `git log ${gitLogFormat} ${baseCommitHash}..HEAD`;
-    }
-  } else {
-    gitLogCommand = `git log -${DEFAULT_CHANGELOG_COMMITS_FOR_NEW_SERIES} ${gitLogFormat}`;
-  }
+  const gitLogCommand = `git log ${gitLogFormat} ${commitRange}`;
 
   const rawLog = getGitCommandOutput(gitLogCommand);
-  if (!rawLog) return "No commits found for this version range.";
+  if (!rawLog || rawLog === "ERROR_EXECUTING_GIT_COMMAND") return {};
 
   const commits = rawLog.split(commitSeparator).filter(c => c.trim() !== "");
   const categorizedCommits: { [category: string]: { scope?: string; message: string; body: string }[] } = {};
@@ -239,6 +228,9 @@ function getChangelog(baseCommitHash: string | null, currentModVersion: string):
     const subject = parts[0] ? parts[0].trim() : "";
     const body = parts[1] ? parts[1].trim() : "";
 
+    // Explicitly skip automated version commits if they somehow get included in range
+    if (versionCommitRegex.test(subject)) continue;
+
     const match = subject.match(conventionalCommitRegex);
     let category = "Changes"; // Default category
     let message = subject;
@@ -247,7 +239,6 @@ function getChangelog(baseCommitHash: string | null, currentModVersion: string):
     if (match) {
       const type = match[1];
       scope = match[2];
-      // const isBreaking = match[3] === '!'; // Could use this for "Major Features" or warnings
       message = match[4];
       category = commitTypeToFactorioCategory[type] || category;
     }
@@ -257,53 +248,123 @@ function getChangelog(baseCommitHash: string | null, currentModVersion: string):
     }
     categorizedCommits[category].push({ scope, message, body });
   }
+  return categorizedCommits;
+}
 
-  let changelogText = "";
-  changelogText += "-".repeat(99) + "\n";
-  changelogText += `Version: ${currentModVersion}\n`;
-  changelogText += `Date: ${new Date().toISOString().split('T')[0]}\n`; // YYYY-MM-DD
+// Formats a single version section
+function formatVersionSection(version: string, date: string, categorizedEntries: { [category: string]: { scope?: string; message: string; body: string }[] }): string {
+  let sectionText = "";
+  sectionText += "-".repeat(99) + "\n";
+  sectionText += `Version: ${version}\n`;
+  sectionText += `Date: ${date}\n`;
 
   let hasEntries = false;
   for (const categoryName of factorioCategoryOrder) {
-    if (categorizedCommits[categoryName] && categorizedCommits[categoryName].length > 0) {
+    if (categorizedEntries[categoryName] && categorizedEntries[categoryName].length > 0) {
       hasEntries = true;
-      changelogText += `  ${categoryName}:\n`;
-      for (const entry of categorizedCommits[categoryName]) {
-        changelogText += `    - ${entry.scope ? `(${entry.scope}) ` : ''}${entry.message}\n`;
+      sectionText += `  ${categoryName}:\n`;
+      for (const entry of categorizedEntries[categoryName]) {
+        sectionText += `    - ${entry.scope ? `(${entry.scope}) ` : ''}${entry.message}\n`;
         if (entry.body) {
           entry.body.split('\n').forEach(bodyLine => {
-            if (bodyLine.trim() !== "") { // Avoid empty lines from body creating weird spacing
-              changelogText += `      ${bodyLine}\n`;
+            if (bodyLine.trim() !== "") {
+              sectionText += `      ${bodyLine}\n`;
             }
           });
         }
       }
     }
   }
-  
-  // Fallback for commits that didn't fit into the ordered categories or if no conventional commits were found
-  for (const categoryName in categorizedCommits) {
-    if (!factorioCategoryOrder.includes(categoryName) && categorizedCommits[categoryName].length > 0) {
+
+  // Handle uncategorized/fallback
+  for (const categoryName in categorizedEntries) {
+    if (!factorioCategoryOrder.includes(categoryName) && categorizedEntries[categoryName].length > 0) {
         hasEntries = true;
-        changelogText += `  ${categoryName}:\n`; // This would be "Changes" for non-conventional or unmapped
-        for (const entry of categorizedCommits[categoryName]) {
-            changelogText += `    - ${entry.scope ? `(${entry.scope}) ` : ''}${entry.message}\n`;
+        sectionText += `  ${categoryName}:\n`; // Usually "Changes"
+        for (const entry of categorizedEntries[categoryName]) {
+            sectionText += `    - ${entry.scope ? `(${entry.scope}) ` : ''}${entry.message}\n`;
             if (entry.body) {
                 entry.body.split('\n').forEach(bodyLine => {
                     if (bodyLine.trim() !== "") {
-                        changelogText += `      ${bodyLine}\n`;
+                        sectionText += `      ${bodyLine}\n`;
                     }
                 });
             }
         }
     }
   }
-
+  
   if (!hasEntries) {
-    changelogText += "  Changes:\n    - No specific changes documented for this version (or commits did not follow conventional format).\n";
+      sectionText += "  Changes:\n    - No specific changes documented for this version (or commits did not follow conventional format).\n";
   }
 
-  return changelogText;
+  return sectionText;
+}
+
+// Main function to generate the cumulative changelog
+function getCumulativeChangelog(currentBuildVersion: string): string {
+  console.log("Generating cumulative changelog...");
+  let cumulativeChangelog = "";
+
+  try {
+    // 1. Find all version bump commits
+    const versionCommitFormat = `%H----%cs----%s`; // Hash----Date----Subject
+    const rawVersionCommits = getGitCommandOutput(`git log --grep="^chore: Update version to" --pretty=format:"${versionCommitFormat}"`).split('\n').filter(Boolean);
+    
+    const versionBumps: { hash: string; version: string; date: string }[] = [];
+    for (const line of rawVersionCommits) {
+        if (line === "ERROR_EXECUTING_GIT_COMMAND") continue;
+        const parts = line.split('----');
+        if (parts.length === 3) {
+            const hash = parts[0];
+            const date = parts[1];
+            const subject = parts[2];
+            const match = subject.match(versionCommitRegex);
+            if (match) {
+                versionBumps.push({ hash, version: match[1], date });
+            }
+        }
+    }
+    // Sorted newest first by git log default
+    console.log(`Found ${versionBumps.length} version bump commits.`);
+
+    // 2. Generate section for the current build (since the latest version bump)
+    const latestBumpHash = versionBumps.length > 0 ? versionBumps[0].hash : null;
+    const rangeForCurrent = latestBumpHash ? `${latestBumpHash}..HEAD` : "HEAD"; // HEAD includes all if no bumps
+    console.log(`Generating section for current build ${currentBuildVersion} (range: ${rangeForCurrent})`);
+    const currentEntries = getCategorizedEntries(rangeForCurrent);
+    cumulativeChangelog += formatVersionSection(currentBuildVersion, new Date().toISOString().split('T')[0], currentEntries);
+
+    // 3. Generate sections for past versions based on bumps
+    for (let i = 0; i < versionBumps.length; i++) {
+      const currentBump = versionBumps[i];
+      const previousBump = versionBumps[i + 1]; // Older bump
+      const previousBumpHash = previousBump ? previousBump.hash : null;
+
+      let range = "";
+      if (previousBumpHash) {
+        range = `${previousBumpHash}..${currentBump.hash}`;
+      } else {
+        // Range for the oldest version found: from start up to the oldest bump
+        range = currentBump.hash; // `git log HASH` shows from start up to HASH
+      }
+      
+      console.log(`Generating section for past version ${currentBump.version} (range: ${range})`);
+      const pastEntries = getCategorizedEntries(range);
+      // Only add section if there were actual work entries in that range
+      if (Object.keys(pastEntries).length > 0) {
+         cumulativeChangelog += formatVersionSection(currentBump.version, currentBump.date, pastEntries);
+      } else {
+         console.log(` - Skipping section for ${currentBump.version}, no work commits found in range ${range}.`);
+      }
+    }
+
+  } catch (error) {
+    console.error("Error generating cumulative changelog:", error);
+    return "Changelog generation failed.";
+  }
+
+  return cumulativeChangelog;
 }
 
 // --- Main Script ---
@@ -440,12 +501,11 @@ async function main() {
     await fs.writeFile(infoJsonPathInInitialDist, JSON.stringify(infoJsonData, null, 2));
     console.log(`Generated info.json at ${infoJsonPathInInitialDist}`);
 
-    // 3. Generate changelog.txt directly into initialDistDir
-    const changelogBaseCommit = baseCommitForSeries;
-    const changelogContent = getChangelog(changelogBaseCommit, newVersion);
+    // 3. Generate cumulative changelog directly into initialDistDir
+    const changelogContent = getCumulativeChangelog(newVersion); // Use the calculated newVersion
     const changelogPathInInitialDist = path.resolve(initialDistDir, 'changelog.txt');
     await fs.writeFile(changelogPathInInitialDist, changelogContent);
-    console.log(`Generated changelog.txt at ${changelogPathInInitialDist}`);
+    console.log(`Generated cumulative changelog.txt at ${changelogPathInInitialDist}`);
 
     // 4. Build Lua files (output should also go to ./initialDistDir)
     console.log(`Building Lua files (output should be in ./${initialDistDir})...`);
