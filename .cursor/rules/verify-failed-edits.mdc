@@ -1,0 +1,22 @@
+---
+description:
+globs:
+alwaysApply: true
+---
+# Rule: Handling Suspected Failed Edits
+
+**If an `edit_file` operation results in an unexpected diff, or has failed:**
+
+You **MUST** verify the file contents before proceeding or re-attempting the edit. Choose one of the following verification methods:
+
+1.  **AI Verification:**
+    *   Run `sleep 10 && cat <filename>` using the `run_terminal_cmd` tool.
+    *   **If you confirm the edit was applied correctly**, you may proceed without user interaction.
+    *   *(Note: `sleep 10` allows for potential file system delays.)*
+2.  **User Verification (If AI verification is not performed or is inconclusive):**
+    *   Inform the user you suspect the edit failed.
+    *   Instruct them to run `sleep 10 && cat <filename>` in their terminal.
+    *   Ask them to confirm if the edit is present in the output.
+    *   **DO NOT** proceed until the user confirms the file's status.
+
+This verification step is crucial to ensure the intended changes are correctly applied.

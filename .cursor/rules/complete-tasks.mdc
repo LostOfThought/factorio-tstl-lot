@@ -1,0 +1,15 @@
+---
+description:
+globs:
+alwaysApply: true
+---
+# Rule: Ensure Task Completion
+
+**CRITICAL:** You **MUST** complete the assigned task fully before returning control to the user.
+
+1.  **Verify Completion:** Before concluding your response, actively verify that the task's objective has been met. Use available tools (e.g., reading files, running commands) to confirm the outcome.
+2.  **Address Obstacles:** If you encounter an obstacle preventing task completion, clearly state the issue and what information or action is required from the user to proceed.
+3.  **Do Not Assume:** Do not assume a step has succeeded without verification. For instance, after an `edit_file` operation, **always** verify the changes were applied correctly using the methods outlined in the `verify-failed-edits` rule.
+4.  **Persistence:** If an action fails (like an edit), attempt reasonable recovery steps (like re-applying the edit or verifying the file state) before asking the user for help.
+
+**Returning control prematurely without full completion or a clear blocker is unacceptable.**

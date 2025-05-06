@@ -1,0 +1,37 @@
+{
+  "name": "factorio-tstl-lot",
+  "version": "0.0.0",
+  "private": true,
+  "description": "",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "clean": "rimraf ./dist",
+    "build:shared": "tstl -p tsconfig.json",
+    "build:settings": "tstl -p tsconfig.settings.json",
+    "build:data": "tstl -p tsconfig.data.json",
+    "build:control": "tstl -p tsconfig.control.json",
+    "build:all": "concurrently -n \"SHARED,SETTINGS,DATA,CONTROL\" -c \"bgBlue.bold,bgGreen.bold,bgYellow.bold,bgMagenta.bold\" \"pnpm:build:shared\" \"pnpm:build:settings\" \"pnpm:build:data\" \"pnpm:build:control\"",
+    "build": "pnpm run build:all",
+    "dev:shared": "tstl -p tsconfig.json --watch",
+    "dev:settings": "tstl -p tsconfig.settings.json --watch",
+    "dev:data": "tstl -p tsconfig.data.json --watch",
+    "dev:control": "tstl -p tsconfig.control.json --watch",
+    "dev:all": "concurrently -n \"SHARED,SETTINGS,DATA,CONTROL\" -c \"bgBlue.bold,bgGreen.bold,bgYellow.bold,bgMagenta.bold\" --kill-others \"pnpm:dev:shared\" \"pnpm:dev:settings\" \"pnpm:dev:data\" \"pnpm:dev:control\"",
+    "dev": "pnpm run dev:all",
+    "bundle": "pnpm vite-node tools/bundle-mod.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^22.15.12",
+    "concurrently": "^9.1.2",
+    "lua-types": "^2.13.1",
+    "rimraf": "^6.0.1",
+    "typed-factorio": "^3.20.0",
+    "typescript": "^5.8.2",
+    "typescript-to-lua": "^1.31.0",
+    "vite-node": "^3.1.3"
+  }
+}

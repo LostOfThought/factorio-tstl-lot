@@ -1,0 +1,30 @@
+---
+description:
+globs:
+alwaysApply: true
+---
+# Custom Tools Guide
+
+When you require more complex command-line operations, need to process output in a structured way, or want to encapsulate reusable logic, you can create custom tools using JavaScript or TypeScript.
+
+## Location
+
+*   Place your custom tool scripts within the `[tools/](mdc:tools)` directory.
+
+## Technology
+
+*   You can write tools in either JavaScript or TypeScript.
+*   The `vite-node` execution environment is available within the `[tools/](mdc:tools)` directory's context, allowing you to use modern JS/TS features and import modules. `vite-node` is pre-installed in the `tools` package.
+
+## Execution
+
+*   To run a custom tool, use the `run_terminal_cmd` tool.
+*   Execute your script using `pnpm vite-node <script_name>.ts` (or `.js`). Remember to `cd tools` first if needed.
+
+**Example:**
+
+```bash
+cd tools && pnpm vite-node my-custom-tool.ts --input some_data
+```
+
+This allows for powerful, custom automation tailored to the project's needs.

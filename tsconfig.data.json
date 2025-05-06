@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["lua-types/5.2", "typed-factorio/prototype"],
+    "rootDir": "./src/data"
+  },
+  "include": [
+    "./src/data/**/*.ts",
+  ],
+  "exclude": [],
+} 
