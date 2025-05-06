@@ -1,6 +1,6 @@
 {
   "name": "factorio-tstl-lot",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "",
   "type": "module",
@@ -21,9 +21,33 @@
     "dev": "pnpm run dev:all",
     "bundle": "pnpm vite-node tools/bundle-mod.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": {
+    "name": "Ryan \"LostOfThought\" Wright"
+  },
+  "homepage": "https://github.com/lostofthought/factorio-tstl-lot",
+  "bugs": {
+    "url": "https://github.com/lostofthought/factorio-tstl-lot/issues"
+  },
+  "factorio": {
+    "factorio_version": "1.1",
+    "title": "Factorio TSTL Template by Lot",
+    "dependencies": [
+      "base >= 1.1",
+      "? some-optional-mod >= 0.1.0",
+      "! some-incompatible-mod"
+    ],
+    "dlc": {
+      "quality_required": false,
+      "space_travel_required": false
+    }
+  },
+  "keywords": [
+    "factorio",
+    "mod",
+    "typescript",
+    "tstl"
+  ],
+  "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.15.12",
     "concurrently": "^9.1.2",

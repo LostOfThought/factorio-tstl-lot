@@ -22,11 +22,22 @@ type FactorioPackageConfig = {
   dlc?: FactorioDlcRequirementsConfig; // Use the refined type here
 };
 
+type AuthorObject = {
+  name?: string;
+  email?: string;
+  url?: string;
+};
+
 type PackageJson = {
   name: string;
   version: string;
-  author: string;
+  author?: string | AuthorObject; // Author can be string or object
   description: string;
+  homepage?: string; // Standard homepage field
+  bugs?: { // Standard bugs field (can be string or object)
+    url?: string;
+    email?: string;
+  } | string;
   factorio?: FactorioPackageConfig;
   [key: string]: any;
 };
@@ -63,67 +74,112 @@ function getGitCommandOutput(command: string): string {
   try {
     return execSync(command, { encoding: 'utf8' }).trim();
   } catch (error) {
-    console.warn(`Error executing git command: ${command}`, error);
-    return "";
+    // console.warn(`Git command failed: ${command}`, error.status, error.message); // Keep this for debugging if needed
+    return "ERROR_EXECUTING_GIT_COMMAND"; // Return a distinct string for caught errors
   }
 }
 
 function getGitShortHash(): string {
-  return getGitCommandOutput('git rev-parse --short HEAD');
+  const hash = getGitCommandOutput('git rev-parse --short HEAD');
+  return hash === "ERROR_EXECUTING_GIT_COMMAND" ? "unknownhash" : hash;
 }
 
 function getGitDirtySuffix(): string {
-  // Check for uncommitted changes (both staged and unstaged)
-  const unstagedChanges = getGitCommandOutput('git diff --quiet');
-  const stagedChanges = getGitCommandOutput('git diff --cached --quiet');
-  // If either command fails (non-zero exit code), it means there are changes.
-  // execSync throws on non-zero exit, caught by getGitCommandOutput, which returns "".
-  // So we need to check if the *attempt* to run them indicated changes.
-  // A more direct way for dirtiness:
-  const isDirty = getGitCommandOutput('git status --porcelain');
-  return isDirty ? '-dirty' : '';
+  // Check for uncommitted changes using `git status --porcelain`
+  // This command outputs one line per changed/staged/untracked file.
+  // If it outputs anything, the working directory is dirty or has untracked files.
+  const statusOutput = getGitCommandOutput('git status --porcelain');
+  if (statusOutput && statusOutput !== "ERROR_EXECUTING_GIT_COMMAND") {
+    return '-dirty';
+  }
+  return '';
 }
 
-// Finds the hash of the most recent commit that touched package.json
-// and where the version in package.json started with the given majorMinorPrefix.
+// Finds the hash of the commit that *started* the current version series (M.m).
+// This is typically the commit where M.m.0 was set, or where M or m was bumped.
 function findBaseCommitForVersionSeries(majorMinorPrefix: string): string | null {
+  console.log(`Searching for base commit for version series starting with: ${majorMinorPrefix}`);
   try {
-    // Get all commits that touched package.json, with their hash and subject (for the version)
-    // This is a bit complex:
-    // 1. `git log --pretty=format:"%H" --follow -- package.json` gets commit hashes for package.json changes.
-    // 2. For each hash, we need to check the version in package.json *at that commit*.
-    const commitsTouchingPackageJson = getGitCommandOutput('git log --pretty=format:"%H" --follow -- package.json').split('\n').filter(Boolean);
+    const commitsTouchingPackageJson = getGitCommandOutput(`git log --pretty=format:"%H" --follow -- package.json`).split('\n').filter(Boolean);
+    if (!commitsTouchingPackageJson || commitsTouchingPackageJson.length === 0) {
+        console.log("No commits found touching package.json.");
+        return null;
+    }
 
     for (const commitHash of commitsTouchingPackageJson) {
-      const packageJsonContentAtCommit = getGitCommandOutput(`git show ${commitHash}:package.json`);
-      if (packageJsonContentAtCommit) {
-        try {
-          const pkg = JSON.parse(packageJsonContentAtCommit);
-          if (pkg.version && typeof pkg.version === 'string' && pkg.version.startsWith(majorMinorPrefix)) {
-            // This is the first commit (most recent) in the log that matches our series
-            return commitHash;
+      const versionAtCommitStr = getGitCommandOutput(`git show ${commitHash}:package.json`);
+      let versionAtCommit: string | null = null;
+      if (versionAtCommitStr && versionAtCommitStr !== "ERROR_EXECUTING_GIT_COMMAND") {
+        try { versionAtCommit = JSON.parse(versionAtCommitStr).version; } catch { /* ignore parse errors */ }
+      }
+
+      if (!versionAtCommit || typeof versionAtCommit !== 'string') {
+        // console.log(` - Skipping commit ${commitHash}: Could not get version from package.json.`);
+        continue; // Skip commits where we can't read the version
+      }
+
+      if (versionAtCommit.startsWith(majorMinorPrefix)) {
+        // This commit matches our series. Now check its parent.
+        // console.log(` - Commit ${commitHash} matches series with version ${versionAtCommit}. Checking parent...`);
+        const parentHashes = getGitCommandOutput(`git rev-parse ${commitHash}^`).split('\n').filter(Boolean);
+        const parentHash = (parentHashes.length > 0 && parentHashes[0] !== "ERROR_EXECUTING_GIT_COMMAND") ? parentHashes[0] : null;
+
+        let versionAtParent: string | null = null;
+        if (parentHash) {
+          const versionAtParentStr = getGitCommandOutput(`git show ${parentHash}:package.json`);
+          if (versionAtParentStr && versionAtParentStr !== "ERROR_EXECUTING_GIT_COMMAND") {
+            try { versionAtParent = JSON.parse(versionAtParentStr).version; } catch { /* ignore */ }
           }
-        } catch (parseError) {
-          console.warn(`Failed to parse package.json at commit ${commitHash}`, parseError);
         }
+
+        const isRootCommit = !parentHash;
+        const parentVersionMatchesSeries = parentHash && versionAtParent && typeof versionAtParent === 'string' && versionAtParent.startsWith(majorMinorPrefix);
+        const commitIsExplicitZeroPatch = versionAtCommit.endsWith('.0');
+
+        // This commit is the base if it starts the M.m series, or resets it to .0
+        if (isRootCommit || !parentVersionMatchesSeries || commitIsExplicitZeroPatch) {
+          console.log(`   - Found base commit: ${commitHash} (Version: ${versionAtCommit}, Parent Version: ${versionAtParent || 'N/A'})`);
+          return commitHash;
+        }
+        // else {
+        //    console.log(`   - Commit ${commitHash} continues series (Parent Version: ${versionAtParent}).`);
+        // }
+      } else {
+        // This commit is from a previous series. If we already passed commits matching our target series,
+        // we might have missed the base (e.g., if the base commit itself had parse errors). 
+        // However, iterating newest-first, the first match found by the logic above *should* be correct.
+        // console.log(` - Commit ${commitHash} has version ${versionAtCommit}, not matching ${majorMinorPrefix}.`);
       }
     }
-    return null; // No such commit found
+    console.log("No suitable base commit found for the series.");
+    return null; // No commit found that started the series
   } catch (error) {
     console.warn("Error finding base commit for version series:", error);
     return null;
   }
 }
 
-function countCommitsSince(commitHash: string): number {
+// Counts commits since a given hash, EXCLUDING automated version bump commits.
+function countWorkCommitsSince(commitHash: string): number {
   if (!commitHash) return 0;
   try {
-    // Count commits on the current branch since the given commit (exclusive of the commit itself)
-    // If the base commit is the current HEAD, this will be 0.
-    const count = getGitCommandOutput(`git rev-list --count ${commitHash}..HEAD`);
-    return parseInt(count, 10) || 0;
+    // Get subjects of commits since the base commit
+    const commitSubjects = getGitCommandOutput(`git log --pretty=format:%s ${commitHash}..HEAD`).split('\n').filter(Boolean);
+    if (commitSubjects[0] === "ERROR_EXECUTING_GIT_COMMAND") {
+        console.warn(`Could not get commit subjects since ${commitHash}`);
+        return 0; // Fallback on error
+    }
+
+    const versionCommitRegex = /^chore: Update version to \d+\.\d+\.\d+$/;
+    let workCommitCount = 0;
+    for (const subject of commitSubjects) {
+      if (!versionCommitRegex.test(subject)) {
+        workCommitCount++;
+      }
+    }
+    return workCommitCount;
   } catch (error) {
-    console.warn(`Error counting commits since ${commitHash}:`, error);
+    console.warn(`Error counting work commits since ${commitHash}:`, error);
     return 0; // Fallback to 0 if error
   }
 }
@@ -162,7 +218,7 @@ function getChangelog(baseCommitHash: string | null, currentModVersion: string):
   const gitLogFormat = `--pretty=format:%s${fieldSeparator}%b${commitSeparator}`;
 
   if (baseCommitHash) {
-    const commitsSinceBase = countCommitsSince(baseCommitHash);
+    const commitsSinceBase = countWorkCommitsSince(baseCommitHash);
     if (commitsSinceBase === 0) {
       gitLogCommand = `git log -1 ${gitLogFormat} ${baseCommitHash}`;
     } else {
@@ -256,7 +312,11 @@ async function main() {
   try {
     console.log("Starting mod bundle process...");
 
-    const initialDistDir = 'dist'; // Temporary name for initial build output
+    // Determine Git status early, before any file modifications by this script
+    const shortHash = getGitShortHash();
+    const dirtySuffix = getGitDirtySuffix();
+
+    const initialDistDir = 'dist';
     const releasesDir = path.resolve(process.cwd(), 'releases');
     const packageJsonPath = path.resolve(process.cwd(), 'package.json');
 
@@ -271,31 +331,84 @@ async function main() {
     const baseCommitForSeries = findBaseCommitForVersionSeries(majorMinorPrefix);
     let patchNumber = 0;
     if (baseCommitForSeries) {
-      patchNumber = countCommitsSince(baseCommitForSeries);
+      patchNumber = countWorkCommitsSince(baseCommitForSeries);
     }
     const newVersion = `${major}.${minor}.${patchNumber}`;
 
-    if (packageJson.version !== newVersion) {
-      console.log(`Updating package.json version from ${currentVersion} to ${newVersion}`);
-      packageJson.version = newVersion;
+    const currentMajorMinorPatch = currentVersion.split('.').map(Number);
+    const newMajorMinorPatch = newVersion.split('.').map(Number);
+
+    let versionToUse = currentVersion; // Default to using the version already in package.json
+
+    if (newMajorMinorPatch[0] > currentMajorMinorPatch[0] || 
+        (newMajorMinorPatch[0] === currentMajorMinorPatch[0] && newMajorMinorPatch[1] > currentMajorMinorPatch[1]) || 
+        (newMajorMinorPatch[0] === currentMajorMinorPatch[0] && newMajorMinorPatch[1] === currentMajorMinorPatch[1] && newMajorMinorPatch[2] > currentMajorMinorPatch[2])) {
+      // If new version is genuinely higher (M, m, or p)
+      versionToUse = newVersion;
+    } else if (newMajorMinorPatch[0] === currentMajorMinorPatch[0] && 
+               newMajorMinorPatch[1] === currentMajorMinorPatch[1] && 
+               newMajorMinorPatch[2] < currentMajorMinorPatch[2]) {
+      // If M.m is same, but new patch is lower, stick with current (higher) patch from package.json.
+      // This handles cases where package.json might have been manually set to a higher patch.
+      console.log(`Calculated patch (${newMajorMinorPatch[2]}) is lower than existing patch (${currentMajorMinorPatch[2]}) for ${major}.${minor}. Using existing version: ${currentVersion}`);
+      versionToUse = currentVersion;
+    } else {
+      // Otherwise (M.m.p is same, or new M.m is lower which shouldn't happen with current logic but good to be safe)
+      // stick to currentVersion unless new one is strictly greater.
+      // If newVersion is simply M.m.0 because no commits since M.m was set, and current is M.m.Z, we use M.m.Z.
+      // If newVersion is M.m.N and current is M.m.Z where N > Z, it's covered by the first `if`.
+      // If newVersion is M.m.N and current is M.m.Z where N == Z, it will fall here and use currentVersion (no change needed).
+      versionToUse = currentVersion; 
+    }
+
+    if (packageJson.version !== versionToUse) {
+      console.log(`Updating package.json version from ${packageJson.version} to ${versionToUse}`);
+      packageJson.version = versionToUse;
       await fs.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
       packageJsonContent = await fs.readFile(packageJsonPath, 'utf-8'); // Re-read
       packageJson = JSON.parse(packageJsonContent) as PackageJson;
+      console.log(`package.json version updated to ${versionToUse}.`);
     } else {
       console.log(`package.json version ${currentVersion} is already up-to-date.`);
     }
 
     const modName = packageJson.name;
-    const modVersion = packageJson.version; // Final version for naming
-    const modAuthor = packageJson.author || 'Unknown Author';
+    const modVersion = packageJson.version;
+
+    // Derive author and contact from standard fields
+    let authorString = 'Unknown Author';
+    let contactString: string | undefined = undefined;
+
+    if (typeof packageJson.author === 'object' && packageJson.author !== null) {
+      // Explicitly check the type again for the linter
+      const authorObj = packageJson.author as AuthorObject;
+      authorString = authorObj.name || authorString;
+      contactString = authorObj.email;
+    } else if (typeof packageJson.author === 'string') {
+      authorString = packageJson.author;
+    }
+
+    // Fallback to bugs email if no author email
+    if (!contactString && typeof packageJson.bugs === 'object' && packageJson.bugs !== null) {
+      // Explicitly check type again
+      const bugsObj = packageJson.bugs as { url?: string; email?: string };
+      contactString = bugsObj.email;
+    }
+
+    // Allow override from factorio config (though discouraged)
+    contactString = packageJson.factorio?.contact || contactString;
+
+    // Derive homepage from standard field
+    // Allow override from factorio config (though discouraged)
+    const homepageString = packageJson.homepage || packageJson.factorio?.homepage;
+
     const modDescription = packageJson.description || 'No description provided.';
     const factorioConfig = packageJson.factorio || {};
     const factorioVersion = factorioConfig.factorio_version || DEFAULT_FACTORIO_VERSION;
+    // Title: Use factorio.title override, then package.json.name
     const title = factorioConfig.title || modName;
 
-    // Construct dynamic build folder name
-    const shortHash = getGitShortHash();
-    const dirtySuffix = getGitDirtySuffix();
+    // Construct dynamic build folder name using pre-determined git status
     const dynamicBuildFolderName = `${modName}_${modVersion}-${shortHash}${dirtySuffix}`;
     const dynamicBuildFolderPath = path.resolve(process.cwd(), dynamicBuildFolderName);
 
@@ -310,12 +423,18 @@ async function main() {
 
     // 2. Generate info.json directly into initialDistDir
     const infoJsonData: InfoJson = {
-      name: modName, version: modVersion, title: title, author: modAuthor,
-      factorio_version: factorioVersion, description: modDescription,
-      contact: factorioConfig.contact, homepage: factorioConfig.homepage,
+      name: modName,
+      version: modVersion,
+      title: title, // Use derived title
+      author: authorString, // Use derived author
+      factorio_version: factorioVersion,
+      description: modDescription,
+      contact: contactString, // Use derived contact
+      homepage: homepageString, // Use derived homepage
       dependencies: factorioConfig.dependencies || [`base >= ${factorioVersion}`],
       ...(factorioConfig.dlc || {}),
     };
+    // Clean up undefined fields
     for (const key in infoJsonData) { if (infoJsonData[key as keyof InfoJson] === undefined) { delete infoJsonData[key as keyof InfoJson]; }}
     const infoJsonPathInInitialDist = path.resolve(initialDistDir, 'info.json');
     await fs.writeFile(infoJsonPathInInitialDist, JSON.stringify(infoJsonData, null, 2));
