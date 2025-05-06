@@ -443,17 +443,25 @@ async function main() {
   try {
     console.log("Starting mod packaging process...");
 
-    // Check for --ci-build flag
-    const isCiBuild = process.argv.includes('--ci-build');
-    if (isCiBuild) {
-      console.log("CI Build Mode: Version bumping and git commit will be skipped.");
+    const isCiBuildArg = process.argv.includes('--ci-build');
+    let isReleaseModeArg = process.argv.includes('--release');
+
+    if (isCiBuildArg && isReleaseModeArg) {
+      console.warn("Warning: --ci-build and --release flags were both specified. --ci-build takes precedence; --release actions will be skipped.");
+      isReleaseModeArg = false;
     }
 
-    // Determine Git status early, before any file modifications by this script
+    if (isCiBuildArg) {
+      console.log("CI Build Mode: Version bumping, git commits, and tagging will be skipped.");
+    }
+    // Only log if release mode is actually active and not overridden by CI mode
+    if (isReleaseModeArg && !isCiBuildArg) { 
+      console.log("Release Mode Active: A git tag will be created and pushed if operations are successful.");
+    }
+
     const shortHash = getGitShortHash();
     const dirtySuffix = getGitDirtySuffix();
 
-    // Fail fast if the repository is dirty
     if (dirtySuffix) {
       console.error("ERROR: Repository is dirty. Please commit or stash your changes before running the package script.");
       console.error("You can use 'git status' to see the changes.");
@@ -464,15 +472,13 @@ async function main() {
     const releasesDir = path.resolve(process.cwd(), 'releases');
     const packageJsonPath = path.resolve(process.cwd(), 'package.json');
 
-    // 1. Read package.json and calculate version
     let packageJsonContent = await fs.readFile(packageJsonPath, 'utf-8');
     let packageJson = JSON.parse(packageJsonContent) as PackageJson;
 
-    let versionToUse = packageJson.version; // Default to using the version already in package.json
-    let packageJsonWasUpdatedByScript = false; // Flag to track if we update package.json
+    let versionToUse = packageJson.version;
+    let packageJsonWasUpdatedByScript = false;
 
-    if (!isCiBuild) {
-      // --- This block is skipped in CI build --- 
+    if (!isCiBuildArg) {
       const currentVersion = packageJson.version;
       const [major, minor] = currentVersion.split('.').map(Number);
       const majorMinorPrefix = `${major}.${minor}.`;
@@ -495,9 +501,9 @@ async function main() {
                  newMajorMinorPatch[1] === currentMajorMinorPatch[1] && 
                  newMajorMinorPatch[2] < currentMajorMinorPatch[2]) {
         console.log(`Calculated patch (${newMajorMinorPatch[2]}) is lower than existing patch (${currentMajorMinorPatch[2]}) for ${major}.${minor}. Using existing version: ${currentVersion}`);
-        versionToUse = currentVersion;
+        versionToUse = currentVersion; // Stays as currentVersion
       } else {
-        versionToUse = currentVersion; 
+        versionToUse = currentVersion; // Stays as currentVersion
       }
 
       if (packageJson.version !== versionToUse) {
@@ -505,55 +511,117 @@ async function main() {
         packageJson.version = versionToUse;
         await fs.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
         console.log(`package.json version updated to ${versionToUse}.`);
-        packageJsonWasUpdatedByScript = true; // Set the flag
+        packageJsonWasUpdatedByScript = true;
 
         console.log(`Committing package.json version update to ${versionToUse}...`);
         try {
           execSync(`git add ${packageJsonPath} && git commit -m "chore: Update version to ${versionToUse}"`);
           console.log(`Committed version update: ${versionToUse} to package.json`);
 
-          // Push the commit
           console.log(`Pushing commit for version ${versionToUse}...`);
           execSync(`git push -u origin HEAD`);
           console.log(`Pushed commit for version ${versionToUse}.`);
-
         } catch (gitError: unknown) { 
           let errorMessage = "An unknown error occurred during git operation.";
-          let specificErrorType = "general"; // To track if it's commit or push
-
+          let specificErrorType = "general";
           if (gitError instanceof Error) {
             errorMessage = gitError.message;
-            // Try to infer the type of git error from the message
-            if (errorMessage.toLowerCase().includes("commit")) {
-                specificErrorType = "commit";
-            } else if (errorMessage.toLowerCase().includes("push")) {
-                specificErrorType = "push";
-            }
+            if (errorMessage.toLowerCase().includes("commit")) specificErrorType = "commit";
+            else if (errorMessage.toLowerCase().includes("push")) specificErrorType = "push";
           }
-          
-          if (specificErrorType === "commit") {
-             console.error(`ERROR: Failed to commit package.json version update. ${errorMessage}`);
-          } else if (specificErrorType === "push") {
-             console.error(`ERROR: Failed to push version update commit. ${errorMessage}`);
-          } else {
-             console.error(`ERROR: Git operation failed. ${errorMessage}`);
-          }
+          if (specificErrorType === "commit") console.error(`ERROR: Failed to commit package.json version update. ${errorMessage}`);
+          else if (specificErrorType === "push") console.error(`ERROR: Failed to push version update commit. ${errorMessage}`);
+          else console.error(`ERROR: Git operation failed. ${errorMessage}`);
           console.error("Please ensure Git is configured (user.name, user.email), no other Git processes are interfering, and you have push access.");
           process.exit(1);
         }
-      } else {
+
+        // Successfully committed and pushed package.json update if it happened.
+        // Now, if in release mode, handle tagging.
+        if (isReleaseModeArg) {
+          const tagName = `v${versionToUse}`;
+          console.log(`Release mode: Attempting to create and push tag ${tagName}...`);
+          try {
+            const localTagExistsOutput = getGitCommandOutput(`git rev-parse refs/tags/${tagName}`);
+            const localTagExists = localTagExistsOutput !== "ERROR_EXECUTING_GIT_COMMAND";
+
+            if (localTagExists) {
+              const localTagCommit = localTagExistsOutput;
+              const headCommit = getGitCommandOutput('git rev-parse HEAD');
+              console.log(`Tag ${tagName} already exists locally.`);
+              if (localTagCommit !== headCommit && headCommit !== "ERROR_EXECUTING_GIT_COMMAND") {
+                console.warn(`Warning: Local tag ${tagName} points to commit ${localTagCommit.substring(0, 7)}, but HEAD is ${headCommit.substring(0, 7)}.`);
+                console.warn(`The script will attempt to push the existing local tag ${tagName}. If this is not intended, please resolve manually (e.g., delete and recreate the tag on the correct commit, or ensure HEAD is the desired commit).`);
+              } else if (headCommit === "ERROR_EXECUTING_GIT_COMMAND") {
+                console.warn(`Warning: Could not verify if existing local tag ${tagName} points to HEAD due to git error.`);
+              }
+            } else {
+              console.log(`Creating tag ${tagName} on current commit (HEAD)...`);
+              execSync(`git tag ${tagName}`);
+              console.log(`Successfully created local tag ${tagName}.`);
+            }
+
+            console.log(`Pushing tag ${tagName} to origin...`);
+            execSync(`git push origin ${tagName}`);
+            console.log(`Successfully pushed tag ${tagName}.`);
+
+          } catch (gitError: unknown) {
+            let errorMessage = "An unknown error occurred during git tagging or tag push operation.";
+            if (gitError instanceof Error) { errorMessage = gitError.message; }
+            console.error(`ERROR: Failed to ensure tag ${tagName} is on origin. ${errorMessage}`);
+            console.error("Details: This could be due to the tag already existing on the remote and pointing to a different commit, network issues, or permissions.");
+            console.error(`Please verify the tag status manually (e.g., local: 'git show-ref --tags', remote: 'git ls-remote --tags origin'). Then, resolve any conflicts and push the tag manually if needed ('git push origin ${tagName}').`);
+            process.exit(1); // Tagging is critical for a --release flow.
+          }
+        }
+      } else { // This else corresponds to 'if (packageJson.version !== versionToUse)'
         console.log(`package.json version ${currentVersion} is already up-to-date.`);
+        // If package.json wasn't updated, but we are in release mode, still attempt to tag and push current version.
+        if (isReleaseModeArg) {
+          const tagName = `v${versionToUse}`;
+          console.log(`Release mode (no version change): Attempting to create and push tag ${tagName}...`);
+          try {
+            const localTagExistsOutput = getGitCommandOutput(`git rev-parse refs/tags/${tagName}`);
+            const localTagExists = localTagExistsOutput !== "ERROR_EXECUTING_GIT_COMMAND";
+
+            if (localTagExists) {
+              const localTagCommit = localTagExistsOutput;
+              const headCommit = getGitCommandOutput('git rev-parse HEAD');
+              console.log(`Tag ${tagName} already exists locally.`);
+              if (localTagCommit !== headCommit && headCommit !== "ERROR_EXECUTING_GIT_COMMAND") {
+                console.warn(`Warning: Local tag ${tagName} points to commit ${localTagCommit.substring(0, 7)}, but HEAD is ${headCommit.substring(0, 7)}.`);
+                console.warn(`The script will attempt to push the existing local tag ${tagName}. If this is not intended, please resolve manually.`);
+              } else if (headCommit === "ERROR_EXECUTING_GIT_COMMAND") {
+                console.warn(`Warning: Could not verify if existing local tag ${tagName} points to HEAD due to git error.`);
+              }
+            } else {
+              console.log(`Creating tag ${tagName} on current commit (HEAD)...`);
+              execSync(`git tag ${tagName}`);
+              console.log(`Successfully created local tag ${tagName}.`);
+            }
+
+            console.log(`Pushing tag ${tagName} to origin...`);
+            execSync(`git push origin ${tagName}`);
+            console.log(`Successfully pushed tag ${tagName}.`);
+
+          } catch (gitError: unknown) {
+            let errorMessage = "An unknown error occurred during git tagging or tag push operation.";
+            if (gitError instanceof Error) { errorMessage = gitError.message; }
+            console.error(`ERROR: Failed to ensure tag ${tagName} is on origin. ${errorMessage}`);
+            console.error("Details: This could be due to the tag already existing on the remote and pointing to a different commit, network issues, or permissions.");
+            console.error(`Please verify the tag status manually (e.g., local: 'git show-ref --tags', remote: 'git ls-remote --tags origin'). Then, resolve any conflicts and push the tag manually if needed ('git push origin ${tagName}').`);
+            process.exit(1); 
+          }
+        }
       }
-      // --- End of block skipped in CI build ---
-    } else {
-      // In CI mode, we use the version directly from package.json as is.
-      // packageJson.version is already set to versionToUse by default initialisation.
+    } else { // This is the isCiBuildArg === true block
       console.log(`CI Mode: Using version ${packageJson.version} from package.json.`);
+      // versionToUse remains packageJson.version from initialization, which is correct for CI
     }
 
-    const finalModVersion = packageJson.version;
+    // Ensure finalModVersion reflects the version determined by the logic above
+    const finalModVersion = versionToUse;
     const modName = packageJson.name;
-    // const modVersion = packageJson.version; // Replaced by finalModVersion for clarity
 
     // Derive author and contact from standard fields
     let authorString = 'Unknown Author';
@@ -661,7 +729,7 @@ async function main() {
     console.log(`Successfully packaged mod to ${absoluteZipFilePath}`);
 
   } catch (error) {
-    console.error("Error during bundling process:", error);
+    console.error("Error during main script execution:", error);
     process.exit(1);
   }
 }
