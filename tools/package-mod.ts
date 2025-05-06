@@ -441,7 +441,13 @@ async function getCumulativeChangelog(currentPackageJsonVersion: string, buildSc
 
 async function main() {
   try {
-    console.log("Starting mod bundle process...");
+    console.log("Starting mod packaging process...");
+
+    // Check for --ci-build flag
+    const isCiBuild = process.argv.includes('--ci-build');
+    if (isCiBuild) {
+      console.log("CI Build Mode: Version bumping and git commit will be skipped.");
+    }
 
     // Determine Git status early, before any file modifications by this script
     const shortHash = getGitShortHash();
@@ -462,79 +468,69 @@ async function main() {
     let packageJsonContent = await fs.readFile(packageJsonPath, 'utf-8');
     let packageJson = JSON.parse(packageJsonContent) as PackageJson;
 
-    const currentVersion = packageJson.version;
-    const [major, minor] = currentVersion.split('.').map(Number);
-    const majorMinorPrefix = `${major}.${minor}.`;
-
-    const baseCommitForSeries = findBaseCommitForVersionSeries(majorMinorPrefix);
-    let patchNumber = 0;
-    if (baseCommitForSeries) {
-      patchNumber = countWorkCommitsSince(baseCommitForSeries);
-    }
-    const newVersion = `${major}.${minor}.${patchNumber}`;
-
-    const currentMajorMinorPatch = currentVersion.split('.').map(Number);
-    const newMajorMinorPatch = newVersion.split('.').map(Number);
-
-    let versionToUse = currentVersion; // Default to using the version already in package.json
+    let versionToUse = packageJson.version; // Default to using the version already in package.json
     let packageJsonWasUpdatedByScript = false; // Flag to track if we update package.json
 
-    if (newMajorMinorPatch[0] > currentMajorMinorPatch[0] || 
-        (newMajorMinorPatch[0] === currentMajorMinorPatch[0] && newMajorMinorPatch[1] > currentMajorMinorPatch[1]) || 
-        (newMajorMinorPatch[0] === currentMajorMinorPatch[0] && newMajorMinorPatch[1] === currentMajorMinorPatch[1] && newMajorMinorPatch[2] > currentMajorMinorPatch[2])) {
-      // If new version is genuinely higher (M, m, or p)
-      versionToUse = newVersion;
-    } else if (newMajorMinorPatch[0] === currentMajorMinorPatch[0] && 
-               newMajorMinorPatch[1] === currentMajorMinorPatch[1] && 
-               newMajorMinorPatch[2] < currentMajorMinorPatch[2]) {
-      // If M.m is same, but new patch is lower, stick with current (higher) patch from package.json.
-      // This handles cases where package.json might have been manually set to a higher patch.
-      console.log(`Calculated patch (${newMajorMinorPatch[2]}) is lower than existing patch (${currentMajorMinorPatch[2]}) for ${major}.${minor}. Using existing version: ${currentVersion}`);
-      versionToUse = currentVersion;
-    } else {
-      // Otherwise (M.m.p is same, or new M.m is lower which shouldn't happen with current logic but good to be safe)
-      // stick to currentVersion unless new one is strictly greater.
-      // If newVersion is simply M.m.0 because no commits since M.m was set, and current is M.m.Z, we use M.m.Z.
-      // If newVersion is M.m.N and current is M.m.Z where N > Z, it's covered by the first `if`.
-      // If newVersion is M.m.N and current is M.m.Z where N == Z, it will fall here and use currentVersion (no change needed).
-      versionToUse = currentVersion; 
-    }
+    if (!isCiBuild) {
+      // --- This block is skipped in CI build --- 
+      const currentVersion = packageJson.version;
+      const [major, minor] = currentVersion.split('.').map(Number);
+      const majorMinorPrefix = `${major}.${minor}.`;
 
-    if (packageJson.version !== versionToUse) {
-      console.log(`Updating package.json version from ${packageJson.version} to ${versionToUse}`);
-      packageJson.version = versionToUse;
-      await fs.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
-      console.log(`package.json version updated to ${versionToUse}.`);
-      packageJsonWasUpdatedByScript = true; // Set the flag
-
-      // Automatically commit the package.json version update
-      console.log(`Committing package.json version update to ${versionToUse}...`);
-      try {
-        // Use execSync from child_process, already imported
-        execSync(`git add ${packageJsonPath} && git commit -m "chore: Update version to ${versionToUse}"`);
-        console.log(`Committed version update: ${versionToUse} to package.json`);
-      } catch (commitError: unknown) { // Explicitly type commitError as unknown or any
-        let errorMessage = "An unknown error occurred during commit.";
-        if (commitError instanceof Error) {
-          errorMessage = commitError.message;
-        }
-        console.error(`ERROR: Failed to commit package.json version update. ${errorMessage}`);
-        console.error("Please ensure Git is configured (user.name, user.email) and no other Git processes are interfering.");
-        // Decide if this should be a fatal error. Making it fatal for consistency.
-        process.exit(1);
+      const baseCommitForSeries = findBaseCommitForVersionSeries(majorMinorPrefix);
+      let patchNumber = 0;
+      if (baseCommitForSeries) {
+        patchNumber = countWorkCommitsSince(baseCommitForSeries);
       }
-      // Re-read packageJson if it was truly re-parsed above, or ensure the in-memory 'packageJson' object is the source of truth.
-      // For now, assuming the script uses the 'versionToUse' and 'packageJson.name' etc. that were set prior to this potential re-read.
-      // If other parts of packageJson were modified by other means and then re-read, ensure consistency.
-      // The current logic primarily uses packageJson.name, packageJson.description etc. which are read before this block.
-      // And modVersion is set from 'packageJson.version' *after* this block (if updated) or from 'currentVersion' if not.
-      // Let's ensure modVersion uses the *final* version.
+      const newVersion = `${major}.${minor}.${patchNumber}`;
 
+      const currentMajorMinorPatch = currentVersion.split('.').map(Number);
+      const newMajorMinorPatch = newVersion.split('.').map(Number);
+
+      if (newMajorMinorPatch[0] > currentMajorMinorPatch[0] || 
+          (newMajorMinorPatch[0] === currentMajorMinorPatch[0] && newMajorMinorPatch[1] > currentMajorMinorPatch[1]) || 
+          (newMajorMinorPatch[0] === currentMajorMinorPatch[0] && newMajorMinorPatch[1] === currentMajorMinorPatch[1] && newMajorMinorPatch[2] > currentMajorMinorPatch[2])) {
+        versionToUse = newVersion;
+      } else if (newMajorMinorPatch[0] === currentMajorMinorPatch[0] && 
+                 newMajorMinorPatch[1] === currentMajorMinorPatch[1] && 
+                 newMajorMinorPatch[2] < currentMajorMinorPatch[2]) {
+        console.log(`Calculated patch (${newMajorMinorPatch[2]}) is lower than existing patch (${currentMajorMinorPatch[2]}) for ${major}.${minor}. Using existing version: ${currentVersion}`);
+        versionToUse = currentVersion;
+      } else {
+        versionToUse = currentVersion; 
+      }
+
+      if (packageJson.version !== versionToUse) {
+        console.log(`Updating package.json version from ${packageJson.version} to ${versionToUse}`);
+        packageJson.version = versionToUse;
+        await fs.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
+        console.log(`package.json version updated to ${versionToUse}.`);
+        packageJsonWasUpdatedByScript = true; // Set the flag
+
+        console.log(`Committing package.json version update to ${versionToUse}...`);
+        try {
+          execSync(`git add ${packageJsonPath} && git commit -m "chore: Update version to ${versionToUse}"`);
+          console.log(`Committed version update: ${versionToUse} to package.json`);
+        } catch (commitError: unknown) { 
+          let errorMessage = "An unknown error occurred during commit.";
+          if (commitError instanceof Error) {
+            errorMessage = commitError.message;
+          }
+          console.error(`ERROR: Failed to commit package.json version update. ${errorMessage}`);
+          console.error("Please ensure Git is configured (user.name, user.email) and no other Git processes are interfering.");
+          process.exit(1);
+        }
+      } else {
+        console.log(`package.json version ${currentVersion} is already up-to-date.`);
+      }
+      // --- End of block skipped in CI build ---
     } else {
-      console.log(`package.json version ${currentVersion} is already up-to-date.`);
+      // In CI mode, we use the version directly from package.json as is.
+      // packageJson.version is already set to versionToUse by default initialisation.
+      console.log(`CI Mode: Using version ${packageJson.version} from package.json.`);
     }
 
-    const finalModVersion = packageJson.version; // Use the version from packageJson, which is now guaranteed to be the one we want.
+    const finalModVersion = packageJson.version;
     const modName = packageJson.name;
     // const modVersion = packageJson.version; // Replaced by finalModVersion for clarity
 
@@ -641,7 +637,7 @@ async function main() {
     await fs.rename(dynamicBuildFolderPath, path.resolve(process.cwd(), initialDistDir));
     console.log(`Renamed build folder ./${dynamicBuildFolderName} back to ./${initialDistDir}`);
 
-    console.log(`Successfully bundled mod to ${absoluteZipFilePath}`);
+    console.log(`Successfully packaged mod to ${absoluteZipFilePath}`);
 
   } catch (error) {
     console.error("Error during bundling process:", error);

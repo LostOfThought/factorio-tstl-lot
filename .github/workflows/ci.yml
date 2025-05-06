@@ -1,0 +1,52 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches:
+      - main
+    # Avoid triggering on the commit made by the bundle script during release
+    # by checking the commit message or by ignoring paths typically changed by versioning.
+    # Using paths-ignore is often simpler if the version bump commit is predictable.
+    paths-ignore:
+      - 'package.json' # Adjust if your version is in a different file like info.json
+      - 'info.json'    # If you use this for Factorio mod info and version
+      - 'changelog.txt'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'package.json'
+      - 'info.json'
+      - 'changelog.txt'
+
+jobs:
+  validate:
+    name: Test, Lint, and Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3 # Updated to v3
+        with:
+          version: latest # Or your desired pnpm version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4 # Updated to v4
+        with:
+          node-version: '18' # Or your project's Node.js version
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint # Replace with your actual lint command if different
+
+      - name: Test
+        run: pnpm run test # Replace with your actual test command if different
+
+      - name: Trial Build
+        run: pnpm run build # Replace with your actual build command
+                           # This build is for validation, not for creating release artifacts. 

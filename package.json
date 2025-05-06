@@ -19,14 +19,15 @@
     "dev:control": "tstl -p tsconfig.control.json --watch",
     "dev:all": "concurrently -n \"SHARED,SETTINGS,DATA,CONTROL\" -c \"bgBlue.bold,bgGreen.bold,bgYellow.bold,bgMagenta.bold\" --kill-others \"pnpm:dev:shared\" \"pnpm:dev:settings\" \"pnpm:dev:data\" \"pnpm:dev:control\"",
     "dev": "pnpm run dev:all",
-    "bundle": "pnpm vite-node tools/bundle-mod.ts"
+    "package": "pnpm vite-node tools/package-mod.ts",
+    "package:ci": "pnpm vite-node tools/package-mod.ts --ci-build"
   },
   "author": {
     "name": "Ryan \"LostOfThought\" Wright"
   },
-  "homepage": "https://github.com/lostofthought/factorio-tstl-lot",
+  "homepage": "https://github.com/LostOfThought/factorio-tstl-lot",
   "bugs": {
-    "url": "https://github.com/lostofthought/factorio-tstl-lot/issues"
+    "url": "https://github.com/LostOfThought/factorio-tstl-lot/issues"
   },
   "factorio": {
     "factorio_version": "1.1",
