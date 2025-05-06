@@ -128,41 +128,126 @@ function countCommitsSince(commitHash: string): number {
   }
 }
 
-function getChangelog(baseCommitHash: string | null): string {
-  const prettyFormat = "--pretty=\"format:Version: %s%nDate: %cs%nAuthor: %an%n%b%n---------------------------------------------------------------------------------------------------\"";
+// --- Changelog Generation with Conventional Commits ---
+
+const conventionalCommitRegex = /^(\w+)(?:\(([^\)]+)\))?(!?): (.*)$/;
+
+const factorioCategoryOrder: string[] = [
+  "Major Features", "Features", "Minor Features", "Graphics", "Sounds",
+  "Optimizations", "Balancing", "Combat Balancing", "Circuit Network",
+  "Changes", "Bugfixes", "Modding", "Scripting", "Gui", "Control",
+  "Translation", "Debug", "Ease of use", "Info", "Locale"
+];
+
+const commitTypeToFactorioCategory: { [key: string]: string } = {
+  feat: "Features",
+  fix: "Bugfixes",
+  perf: "Optimizations",
+  docs: "Info", // Or "Changes"
+  style: "Changes", // Or could be ignored if not user-facing
+  refactor: "Changes", // Or "Modding" / "Scripting"
+  test: "Changes",   // Or could be ignored
+  chore: "Changes",  // Or could be ignored
+  build: "Changes",  // Or "Modding"
+  ci: "Changes",     // Or could be ignored
+  revert: "Changes",
+  // You can add more mappings here
+};
+
+function getChangelog(baseCommitHash: string | null, currentModVersion: string): string {
   let gitLogCommand = "";
+  const commitSeparator = "----GIT_COMMIT_SEPARATOR----";
+  const fieldSeparator = "----GIT_FIELD_SEPARATOR----";
+  // We need subject (%s) and body (%b)
+  const gitLogFormat = `--pretty=format:%s${fieldSeparator}%b${commitSeparator}`;
 
   if (baseCommitHash) {
-    // If we have a base, log commits from that base to HEAD
-    // (inclusive of base if it's different from HEAD, or just HEAD if they are same)
-    // To ensure the base commit's change (the version bump usually) is included if it's the *only* commit for this patch series,
-    // we can list the base commit itself if no other commits follow it.
-    // A simpler way is to just log baseCommitHash..HEAD. If baseCommitHash IS HEAD, it's empty.
-    // If we want to include the commit that *started* the series (e.g. the one that bumped to 0.1.0)
-    // and then subsequent commits, we might need a slightly different range like baseCommitHash^..HEAD
-    // For now, let's do baseCommitHash..HEAD which is "commits since baseCommitHash"
-    // If baseCommitHash is HEAD, this will be empty. If we want that commit, we need a different approach for .0.
-    // Let's adjust: if count is 0 (meaning baseCommitHash is HEAD or no new commits), show the base commit itself.
     const commitsSinceBase = countCommitsSince(baseCommitHash);
     if (commitsSinceBase === 0) {
-       // Show the base commit message itself if it's a .0 release for this series (or no new commits yet)
-       gitLogCommand = `git log -1 ${prettyFormat} ${baseCommitHash}`;
+      gitLogCommand = `git log -1 ${gitLogFormat} ${baseCommitHash}`;
     } else {
-       gitLogCommand = `git log ${prettyFormat} ${baseCommitHash}..HEAD`;
+      gitLogCommand = `git log ${gitLogFormat} ${baseCommitHash}..HEAD`;
     }
   } else {
-    // No base commit for this major.minor (e.g. package.json never had this series, or it's a brand new repo)
-    // Show last N commits
-    gitLogCommand = `git log -${DEFAULT_CHANGELOG_COMMITS_FOR_NEW_SERIES} ${prettyFormat}`;
+    gitLogCommand = `git log -${DEFAULT_CHANGELOG_COMMITS_FOR_NEW_SERIES} ${gitLogFormat}`;
   }
 
-  try {
-    const logOutput = getGitCommandOutput(gitLogCommand);
-    return logOutput || "No commits found for this version range.";
-  } catch (error) {
-    console.warn("Error generating changelog:", error);
-    return "Changelog generation failed.";
+  const rawLog = getGitCommandOutput(gitLogCommand);
+  if (!rawLog) return "No commits found for this version range.";
+
+  const commits = rawLog.split(commitSeparator).filter(c => c.trim() !== "");
+  const categorizedCommits: { [category: string]: { scope?: string; message: string; body: string }[] } = {};
+
+  for (const commit of commits) {
+    const parts = commit.split(fieldSeparator);
+    const subject = parts[0] ? parts[0].trim() : "";
+    const body = parts[1] ? parts[1].trim() : "";
+
+    const match = subject.match(conventionalCommitRegex);
+    let category = "Changes"; // Default category
+    let message = subject;
+    let scope: string | undefined = undefined;
+
+    if (match) {
+      const type = match[1];
+      scope = match[2];
+      // const isBreaking = match[3] === '!'; // Could use this for "Major Features" or warnings
+      message = match[4];
+      category = commitTypeToFactorioCategory[type] || category;
+    }
+
+    if (!categorizedCommits[category]) {
+      categorizedCommits[category] = [];
+    }
+    categorizedCommits[category].push({ scope, message, body });
   }
+
+  let changelogText = "";
+  changelogText += "-".repeat(99) + "\n";
+  changelogText += `Version: ${currentModVersion}\n`;
+  changelogText += `Date: ${new Date().toISOString().split('T')[0]}\n`; // YYYY-MM-DD
+
+  let hasEntries = false;
+  for (const categoryName of factorioCategoryOrder) {
+    if (categorizedCommits[categoryName] && categorizedCommits[categoryName].length > 0) {
+      hasEntries = true;
+      changelogText += `  ${categoryName}:\n`;
+      for (const entry of categorizedCommits[categoryName]) {
+        changelogText += `    - ${entry.scope ? `(${entry.scope}) ` : ''}${entry.message}\n`;
+        if (entry.body) {
+          entry.body.split('\n').forEach(bodyLine => {
+            if (bodyLine.trim() !== "") { // Avoid empty lines from body creating weird spacing
+              changelogText += `      ${bodyLine}\n`;
+            }
+          });
+        }
+      }
+    }
+  }
+  
+  // Fallback for commits that didn't fit into the ordered categories or if no conventional commits were found
+  for (const categoryName in categorizedCommits) {
+    if (!factorioCategoryOrder.includes(categoryName) && categorizedCommits[categoryName].length > 0) {
+        hasEntries = true;
+        changelogText += `  ${categoryName}:\n`; // This would be "Changes" for non-conventional or unmapped
+        for (const entry of categorizedCommits[categoryName]) {
+            changelogText += `    - ${entry.scope ? `(${entry.scope}) ` : ''}${entry.message}\n`;
+            if (entry.body) {
+                entry.body.split('\n').forEach(bodyLine => {
+                    if (bodyLine.trim() !== "") {
+                        changelogText += `      ${bodyLine}\n`;
+                    }
+                });
+            }
+        }
+    }
+  }
+
+  if (!hasEntries) {
+    changelogText += "  Changes:\n    - No specific changes documented for this version (or commits did not follow conventional format).\n";
+  }
+
+  return changelogText;
 }
 
 // --- Main Script ---
@@ -238,7 +323,7 @@ async function main() {
 
     // 3. Generate changelog.txt directly into initialDistDir
     const changelogBaseCommit = baseCommitForSeries;
-    const changelogContent = getChangelog(changelogBaseCommit);
+    const changelogContent = getChangelog(changelogBaseCommit, newVersion);
     const changelogPathInInitialDist = path.resolve(initialDistDir, 'changelog.txt');
     await fs.writeFile(changelogPathInInitialDist, changelogContent);
     console.log(`Generated changelog.txt at ${changelogPathInInitialDist}`);
