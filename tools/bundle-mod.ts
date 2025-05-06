@@ -159,29 +159,35 @@ function findBaseCommitForVersionSeries(majorMinorPrefix: string): string | null
   }
 }
 
-// Counts commits since a given hash, EXCLUDING automated version bump commits.
+// Counts work commits since a given hash (exclusive of the hash itself).
 function countWorkCommitsSince(commitHash: string): number {
-  if (!commitHash) return 0;
-  try {
-    // Get subjects of commits since the base commit
-    const commitSubjects = getGitCommandOutput(`git log --pretty=format:%s ${commitHash}..HEAD`).split('\n').filter(Boolean);
-    if (commitSubjects[0] === "ERROR_EXECUTING_GIT_COMMAND") {
-        console.warn(`Could not get commit subjects since ${commitHash}`);
-        return 0; // Fallback on error
-    }
+    if (!commitHash) return 0;
+    try {
+        // Get subjects of commits AFTER the base commit up to HEAD
+        const commitSubjects = getGitCommandOutput(`git log --pretty=format:%s ${commitHash}..HEAD`).split('\n').filter(Boolean);
+        if (commitSubjects.length === 0 || commitSubjects[0] === "ERROR_EXECUTING_GIT_COMMAND") {
+            // Handle case where the base commit is HEAD or error occurred
+             if (commitSubjects[0] !== "ERROR_EXECUTING_GIT_COMMAND") {
+                 console.log(` - No commits found since base ${commitHash.substring(0,7)}.`);
+             } else {
+                 console.warn(`Could not get commit subjects since ${commitHash.substring(0,7)}`);
+             }
+            return 0;
+        }
 
-    const versionCommitRegex = /^chore: Update version to \d+\.\d+\.\d+$/;
-    let workCommitCount = 0;
-    for (const subject of commitSubjects) {
-      if (!versionCommitRegex.test(subject)) {
-        workCommitCount++;
-      }
+        const versionCommitRegex = /^chore: Update version to \d+\.\d+\.\d+$/;
+        let workCommitCount = 0;
+        for (const subject of commitSubjects) {
+            if (!versionCommitRegex.test(subject)) {
+                workCommitCount++;
+            }
+        }
+         console.log(` - Found ${commitSubjects.length} total commits, ${workCommitCount} work commits since base ${commitHash.substring(0,7)}.`);
+        return workCommitCount;
+    } catch (error) {
+        console.warn(`Error counting work commits since ${commitHash}:`, error);
+        return 0; // Fallback
     }
-    return workCommitCount;
-  } catch (error) {
-    console.warn(`Error counting work commits since ${commitHash}:`, error);
-    return 0; // Fallback to 0 if error
-  }
 }
 
 // --- Cumulative Changelog Generation --- //
