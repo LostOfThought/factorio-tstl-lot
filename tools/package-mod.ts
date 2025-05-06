@@ -455,7 +455,7 @@ async function main() {
 
     // Fail fast if the repository is dirty
     if (dirtySuffix) {
-      console.error("ERROR: Repository is dirty. Please commit or stash your changes before running the bundle script.");
+      console.error("ERROR: Repository is dirty. Please commit or stash your changes before running the package script.");
       console.error("You can use 'git status' to see the changes.");
       process.exit(1);
     }

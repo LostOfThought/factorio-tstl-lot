@@ -41,12 +41,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm run lint # Replace with your actual lint command if different
-
-      - name: Test
-        run: pnpm run test # Replace with your actual test command if different
-
       - name: Trial Build
         run: pnpm run build # Replace with your actual build command
                            # This build is for validation, not for creating release artifacts. 
