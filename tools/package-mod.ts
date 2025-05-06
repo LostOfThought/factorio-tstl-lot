@@ -511,13 +511,26 @@ async function main() {
         try {
           execSync(`git add ${packageJsonPath} && git commit -m "chore: Update version to ${versionToUse}"`);
           console.log(`Committed version update: ${versionToUse} to package.json`);
-        } catch (commitError: unknown) { 
-          let errorMessage = "An unknown error occurred during commit.";
-          if (commitError instanceof Error) {
-            errorMessage = commitError.message;
+
+          // Push the commit
+          console.log(`Pushing commit for version ${versionToUse}...`);
+          execSync(`git push`);
+          console.log(`Pushed commit for version ${versionToUse}.`);
+
+        } catch (gitError: unknown) { 
+          let errorMessage = "An unknown error occurred during git operation.";
+          if (gitError instanceof Error) {
+            errorMessage = gitError.message;
           }
-          console.error(`ERROR: Failed to commit package.json version update. ${errorMessage}`);
-          console.error("Please ensure Git is configured (user.name, user.email) and no other Git processes are interfering.");
+          // Distinguish between commit and push error if possible, though execSync output might be generic
+          if (gitError.message.includes("commit")) {
+             console.error(`ERROR: Failed to commit package.json version update. ${errorMessage}`);
+          } else if (gitError.message.includes("push")) {
+             console.error(`ERROR: Failed to push version update commit. ${errorMessage}`);
+          } else {
+             console.error(`ERROR: Git operation failed. ${errorMessage}`);
+          }
+          console.error("Please ensure Git is configured (user.name, user.email), no other Git processes are interfering, and you have push access.");
           process.exit(1);
         }
       } else {
