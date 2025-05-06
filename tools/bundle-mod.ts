@@ -424,6 +424,13 @@ async function main() {
     const shortHash = getGitShortHash();
     const dirtySuffix = getGitDirtySuffix();
 
+    // Fail fast if the repository is dirty
+    if (dirtySuffix) {
+      console.error("ERROR: Repository is dirty. Please commit or stash your changes before running the bundle script.");
+      console.error("You can use 'git status' to see the changes.");
+      process.exit(1);
+    }
+
     const initialDistDir = 'dist';
     const releasesDir = path.resolve(process.cwd(), 'releases');
     const packageJsonPath = path.resolve(process.cwd(), 'package.json');
@@ -473,15 +480,42 @@ async function main() {
       console.log(`Updating package.json version from ${packageJson.version} to ${versionToUse}`);
       packageJson.version = versionToUse;
       await fs.writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
-      packageJsonContent = await fs.readFile(packageJsonPath, 'utf-8'); // Re-read
-      packageJson = JSON.parse(packageJsonContent) as PackageJson;
+      // packageJsonContent = await fs.readFile(packageJsonPath, 'utf-8'); // Re-read if other parts of packageJson were modified and needed. Not strictly necessary if only version changes.
+      // packageJson = JSON.parse(packageJsonContent) as PackageJson; // As above.
       console.log(`package.json version updated to ${versionToUse}.`);
+
+      // Automatically commit the package.json version update
+      console.log(`Committing package.json version update to ${versionToUse}...`);
+      try {
+        // Use execSync from child_process, already imported
+        execSync(`git add ${packageJsonPath} && git commit -m "chore: Update version to ${versionToUse}"`);
+        console.log(`Committed version update: ${versionToUse} to package.json`);
+      } catch (commitError: unknown) { // Explicitly type commitError as unknown or any
+        let errorMessage = "An unknown error occurred during commit.";
+        if (commitError instanceof Error) {
+          errorMessage = commitError.message;
+        }
+        console.error(`ERROR: Failed to commit package.json version update. ${errorMessage}`);
+        console.error("Please ensure Git is configured (user.name, user.email) and no other Git processes are interfering.");
+        // Decide if this should be a fatal error. Making it fatal for consistency.
+        process.exit(1);
+      }
+      // Re-read packageJson if it was truly re-parsed above, or ensure the in-memory 'packageJson' object is the source of truth.
+      // For now, assuming the script uses the 'versionToUse' and 'packageJson.name' etc. that were set prior to this potential re-read.
+      // If other parts of packageJson were modified by other means and then re-read, ensure consistency.
+      // The current logic primarily uses packageJson.name, packageJson.description etc. which are read before this block.
+      // And modVersion is set from 'packageJson.version' *after* this block (if updated) or from 'currentVersion' if not.
+      // Let's ensure modVersion uses the *final* version.
+
     } else {
       console.log(`package.json version ${currentVersion} is already up-to-date.`);
     }
 
+    // Ensure packageJson reflects the version that will be used, especially if it was updated and committed.
+    // If it was updated, packageJson.version *is* versionToUse.
+    // If not updated, versionToUse was currentVersion, so packageJson.version is also correct.
     const modName = packageJson.name;
-    const modVersion = packageJson.version;
+    const modVersion = packageJson.version; // This should now reliably be the (potentially updated and committed) version
 
     // Derive author and contact from standard fields
     let authorString = 'Unknown Author';
