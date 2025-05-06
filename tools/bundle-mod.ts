@@ -211,47 +211,51 @@ const commitTypeToFactorioCategory: { [key: string]: string } = {
 };
 
 // Parses commits in a given range and returns categorized entries
-function getCategorizedEntries(commitRange: string, excludeCommitHashes: Set<string> = new Set()): { [category: string]: { scope?: string; message: string; body: string }[] } {
-  const commitSeparator = "----GIT_COMMIT_SEPARATOR----";
-  const fieldSeparator = "----GIT_FIELD_SEPARATOR----";
-  // Include commit hash (%H) to allow filtering
-  const gitLogFormat = `--pretty=format:%H${fieldSeparator}%s${fieldSeparator}%b${commitSeparator}`;
-  const gitLogCommand = `git log ${gitLogFormat} ${commitRange}`;
+function getCategorizedEntries(commitRange: string): { [category: string]: { scope?: string; message: string; body: string }[] } {
+    const commitSeparator = "----GIT_COMMIT_SEPARATOR----";
+    const fieldSeparator = "----GIT_FIELD_SEPARATOR----";
+    // Keep %H for potential future use, but we mainly need subject/body now
+    const gitLogFormat = `--pretty=format:%H${fieldSeparator}%s${fieldSeparator}%b${commitSeparator}`;
+    const gitLogCommand = `git log ${gitLogFormat} ${commitRange}`;
 
-  const rawLog = getGitCommandOutput(gitLogCommand);
-  if (!rawLog || rawLog === "ERROR_EXECUTING_GIT_COMMAND") return {};
+    const rawLog = getGitCommandOutput(gitLogCommand);
+    if (!rawLog || rawLog === "ERROR_EXECUTING_GIT_COMMAND") return {};
 
-  const commits = rawLog.split(commitSeparator).filter(c => c.trim() !== "");
-  const categorizedCommits: { [category: string]: { scope?: string; message: string; body: string }[] } = {};
+    const commits = rawLog.split(commitSeparator).filter(c => c.trim() !== "");
+    const categorizedCommits: { [category: string]: { scope?: string; message: string; body: string }[] } = {};
 
-  for (const commit of commits) {
-    const parts = commit.split(fieldSeparator);
-    if (parts.length < 2) continue; // Need at least hash and subject
-    const commitHash = parts[0] ? parts[0].trim() : "";
-    const subject = parts[1] ? parts[1].trim() : "";
-    const body = parts[2] ? parts[2].trim() : "";
+    for (const commit of commits) {
+        const parts = commit.split(fieldSeparator);
+        // Skip if parts are malformed
+        if (parts.length < 2) continue; 
+        // const commitHash = parts[0] ? parts[0].trim() : ""; // We don't strictly need the hash here anymore
+        const subject = parts[1] ? parts[1].trim() : "";
+        const body = parts[2] ? parts[2].trim() : "";
 
-    // Skip specific commits if needed (e.g., the version bump commit itself)
-    if (excludeCommitHashes.has(commitHash)) continue;
+        // Skip automated version bump commits based on their subject pattern
+        if (versionCommitRegex.test(subject)) {
+             console.log(` - Filtering out version commit: ${subject}`);
+             continue;
+        }
 
-    const match = subject.match(conventionalCommitRegex);
-    let category = "Changes"; // Default category
-    let message = subject;
-    let scope: string | undefined = undefined;
+        const match = subject.match(conventionalCommitRegex);
+        let category = "Changes"; // Default category
+        let message = subject;
+        let scope: string | undefined = undefined;
 
-    if (match) {
-      const type = match[1];
-      scope = match[2];
-      message = match[4];
-      category = commitTypeToFactorioCategory[type] || category;
+        if (match) {
+            const type = match[1];
+            scope = match[2];
+            message = match[4];
+            category = commitTypeToFactorioCategory[type] || category;
+        }
+
+        if (!categorizedCommits[category]) {
+            categorizedCommits[category] = [];
+        }
+        categorizedCommits[category].push({ scope, message, body });
     }
-
-    if (!categorizedCommits[category]) {
-      categorizedCommits[category] = [];
-    }
-    categorizedCommits[category].push({ scope, message, body });
-  }
-  return categorizedCommits;
+    return categorizedCommits;
 }
 
 // Finds commits where the version in package.json changed compared to the previous commit affecting the file.
@@ -353,57 +357,55 @@ function formatVersionSection(version: string, date: string, categorizedEntries:
 
 // Main function to generate the cumulative changelog using version change commits as boundaries
 async function getCumulativeChangelog(currentBuildVersion: string): Promise<string> { // Make async
-  console.log("Generating cumulative changelog based on version changes...");
-  let cumulativeChangelog = "";
+    console.log("Generating cumulative changelog based on version changes...");
+    let cumulativeChangelog = "";
 
-  try {
-    // 1. Find all version change commits
-    const versionChangeCommits = await findVersionChangeCommits(); // Use the new function
-    console.log(`Found ${versionChangeCommits.length} version change commits.`);
+    try {
+        // 1. Find all version change commits
+        const versionChangeCommits = await findVersionChangeCommits(); // Use the new function
+        console.log(`Found ${versionChangeCommits.length} version change commits.`);
 
-    // 2. Generate section for the current build (since the latest version change)
-    const latestChangeHash = versionChangeCommits.length > 0 ? versionChangeCommits[0].hash : null;
-    const rangeForCurrent = latestChangeHash ? `${latestChangeHash}..HEAD` : "HEAD"; // HEAD includes all if no changes found
-    console.log(`Generating section for current build ${currentBuildVersion} (range: ${rangeForCurrent})`);
-    // Exclude the latest change commit itself from the *entries* of the current build section
-    const excludeSetCurrent = latestChangeHash ? new Set<string>([latestChangeHash]) : new Set<string>(); // Explicitly type the Set
-    const currentEntries = getCategorizedEntries(rangeForCurrent, excludeSetCurrent);
-    cumulativeChangelog += formatVersionSection(currentBuildVersion, new Date().toISOString().split('T')[0], currentEntries);
+        // 2. Generate section for the current build (since the latest version change)
+        const latestChangeHash = versionChangeCommits.length > 0 ? versionChangeCommits[0].hash : null;
+        const rangeForCurrent = latestChangeHash ? `${latestChangeHash}..HEAD` : "HEAD"; // HEAD includes all if no changes found
+        console.log(`Generating section for current build ${currentBuildVersion} (range: ${rangeForCurrent})`);
+        // Get entries SINCE last change. The filtering is inside getCategorizedEntries.
+        const currentEntries = getCategorizedEntries(rangeForCurrent);
+        cumulativeChangelog += formatVersionSection(currentBuildVersion, new Date().toISOString().split('T')[0], currentEntries);
 
-    // 3. Generate sections for past versions based on detected changes
-    for (let i = 0; i < versionChangeCommits.length; i++) {
-      const currentChange = versionChangeCommits[i]; // e.g., commit that resulted in v0.0.2
-      const previousChange = versionChangeCommits[i + 1]; // e.g., commit that resulted in v0.0.1
-      const previousChangeHash = previousChange ? previousChange.hash : null;
+        // 3. Generate sections for past versions based on detected changes
+        for (let i = 0; i < versionChangeCommits.length; i++) {
+            const currentChange = versionChangeCommits[i]; // e.g., commit H_n resulting in V_n
+            const previousChange = versionChangeCommits[i + 1]; // e.g., commit H_n-1 resulting in V_n-1
+            const previousChangeHash = previousChange ? previousChange.hash : null;
 
-      let range = "";
-      if (previousChangeHash) {
-        // Range is between the previous version change and this one
-        range = `${previousChangeHash}..${currentChange.hash}`;
-      } else {
-        // Range for the oldest version found: from start up to the oldest change commit
-        range = currentChange.hash; // `git log HASH` shows from start up to HASH
-      }
-      
-      console.log(`Generating section for past version ${currentChange.version} (range: ${range})`);
-      // Exclude the commit that *caused* this version change from its *own* section's entries
-      const excludeSetPast = new Set<string>([currentChange.hash]); // Explicitly type the Set
-      const pastEntries = getCategorizedEntries(range, excludeSetPast);
-      
-      // Only add section if there were actual work entries in that range
-      if (Object.keys(pastEntries).some(cat => pastEntries[cat].length > 0)) {
-         cumulativeChangelog += formatVersionSection(currentChange.version, currentChange.date, pastEntries);
-      } else {
-         console.log(` - Skipping section for ${currentChange.version}, no work commits found in range ${range} (excluding the version bump commit itself).`);
-      }
+            let range = "";
+            if (previousChangeHash) {
+                // Commits *after* previous change up to *and including* current change
+                range = `${previousChangeHash}..${currentChange.hash}`;
+            } else {
+                // Oldest version section: Commits from start up to the first version change
+                range = currentChange.hash; // `git log HASH` includes commits up to HASH
+            }
+            
+            console.log(`Generating section for past version ${currentChange.version} (range: ${range})`);
+            // Get entries for this range. getCategorizedEntries now filters the chore commits.
+            const pastEntries = getCategorizedEntries(range);
+            
+            if (Object.keys(pastEntries).some(cat => pastEntries[cat].length > 0)) {
+                // Use the date the version *was set* for the section header
+                cumulativeChangelog += formatVersionSection(currentChange.version, currentChange.date, pastEntries);
+            } else {
+                console.log(` - Skipping section for ${currentChange.version}, no work commits found in range ${range}.`);
+            }
+        }
+
+    } catch (error) {
+        console.error("Error generating cumulative changelog:", error);
+        return "Changelog generation failed.";
     }
 
-  } catch (error) {
-    console.error("Error generating cumulative changelog:", error);
-    return "Changelog generation failed.";
-  }
-
-  return cumulativeChangelog;
+    return cumulativeChangelog;
 }
 
 // --- Main Script ---
