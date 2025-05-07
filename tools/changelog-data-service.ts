@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { spawnSync, SpawnSyncReturns } from 'node:child_process';
 
 // --- Types for Structured Changelog Data ---
 export type CommitMessage = {
@@ -25,12 +25,25 @@ export type VersionEntry = {
 };
 
 // --- Git Helper & Constants ---
-function getGitCommandOutput(command: string): string {
+
+function getGitCommandOutput(command: string, args: string[]): string {
   try {
-    return execSync(command, { encoding: 'utf8' }).trim();
+    const result: SpawnSyncReturns<string> = spawnSync(command, args, { encoding: 'utf8' });
+
+    if (result.error) {
+      // console.warn(`Execution error with command: ${command} ${args.join(' ')}`, result.error.message);
+      return "ERROR_SPAWN_FAILED";
+    }
+
+    if (result.status !== 0) {
+      // console.warn(`Command failed: ${command} ${args.join(' ')}, Exit code: ${result.status}`, result.stderr.toString().trim());
+      return "ERROR_COMMAND_FAILED_NON_ZERO_EXIT";
+    }
+
+    return result.stdout.toString().trim();
   } catch (error) {
-    // console.warn(`Git command failed: ${command}`, error.status, error.message);
-    return "ERROR_EXECUTING_GIT_COMMAND";
+    // console.warn(`Unexpected error executing git command: ${command} ${args.join(' ')}`, error.message);
+    return "ERROR_UNEXPECTED_DURING_SPAWN";
   }
 }
 
@@ -62,10 +75,9 @@ function getCategorizedCommitMessages(commitRange: string): CategorizedCommits {
     const commitSeparator = "----GIT_COMMIT_SEPARATOR----";
     const fieldSeparator = "----GIT_FIELD_SEPARATOR----";
     const gitLogFormat = `--pretty=format:%H${fieldSeparator}%s${fieldSeparator}%b${commitSeparator}`;
-    const gitLogCommand = `git log ${gitLogFormat} ${commitRange}`;
 
-    const rawLog = getGitCommandOutput(gitLogCommand);
-    if (!rawLog || rawLog === "ERROR_EXECUTING_GIT_COMMAND") return {};
+    const rawLog = getGitCommandOutput("git", ["log", gitLogFormat, commitRange]);
+    if (!rawLog || rawLog.startsWith("ERROR_")) return {};
 
     const commits = rawLog.split(commitSeparator).filter(c => c.trim() !== "");
     const categorizedResult: CategorizedCommits = {};
@@ -107,9 +119,10 @@ function getCategorizedCommitMessages(commitRange: string): CategorizedCommits {
 async function findVersionChangeCommits(): Promise<VersionInfo[]> {
     const versionChanges: VersionInfo[] = [];
     try {
-        const commitsTouchingPackageJson = getGitCommandOutput(`git log --pretty=format:"%H----%cs" --follow --reverse -- package.json`).split('\n').filter(Boolean);
+        const commitsTouchingPackageJsonOutput = getGitCommandOutput("git", ["log", '--pretty=format:%H----%cs', "--follow", "--reverse", "--", "package.json"]);
+        const commitsTouchingPackageJson = commitsTouchingPackageJsonOutput.split('\n').filter(Boolean);
         
-        if (!commitsTouchingPackageJson || commitsTouchingPackageJson.length === 0 || commitsTouchingPackageJson[0] === "ERROR_EXECUTING_GIT_COMMAND") {
+        if (!commitsTouchingPackageJsonOutput || commitsTouchingPackageJsonOutput.startsWith("ERROR_") || commitsTouchingPackageJson.length === 0 ) {
             return [];
         }
         let previousCommitVersion: string | null = null;
@@ -119,9 +132,9 @@ async function findVersionChangeCommits(): Promise<VersionInfo[]> {
             const commitHash = parts[0];
             const commitDate = parts[1];
 
-            const versionAtCommitStr = getGitCommandOutput(`git show ${commitHash}:package.json`);
+            const versionAtCommitStr = getGitCommandOutput("git", ["show", `${commitHash}:package.json`]);
             let versionAtCommit: string | null = null;
-            if (versionAtCommitStr && versionAtCommitStr !== "ERROR_EXECUTING_GIT_COMMAND") {
+            if (versionAtCommitStr && !versionAtCommitStr.startsWith("ERROR_")) {
                 try { versionAtCommit = JSON.parse(versionAtCommitStr).version; } catch { /* ignore */ }
             }
 
@@ -220,26 +233,19 @@ export async function generateChangelogDataStructure(
 
 export function getPreviousTag(currentTag: string): string | undefined {
   try {
-    // First, try to get the immediate parent commit of the tag and describe it.
-    // This is often the most reliable way to find the tag on the main line of development before this one.
-    const parentOfCurrentTagCommit = getGitCommandOutput(`git rev-parse ${currentTag}^1`); // ^1 ensures first parent
+    const parentOfCurrentTagCommit = getGitCommandOutput("git", ["rev-parse", `${currentTag}^1`]);
     if (parentOfCurrentTagCommit.startsWith('ERROR_')) {
         console.warn(`Could not get parent commit of tag ${currentTag}.`);
-        // Fallback if tag has no direct parent (e.g., orphan tag or very first commit tag)
-        // or if it's an annotated tag pointing to a commit that has other tags.
     } else {
-        const previousTagAttempt = getGitCommandOutput(`git describe --tags --abbrev=0 ${parentOfCurrentTagCommit}`);
+        const previousTagAttempt = getGitCommandOutput("git", ["describe", "--tags", "--abbrev=0", parentOfCurrentTagCommit]);
         if (!previousTagAttempt.startsWith('ERROR_') && previousTagAttempt !== currentTag) {
             console.log(`Found previous tag ${previousTagAttempt} by describing parent of ${currentTag}`);
             return previousTagAttempt;
         }
     }
 
-    // Fallback: List all tags sorted by version and find the one before currentTag.
-    // This assumes semver-like tags (e.g., v1.0.0, v1.2.3)
-    // Use --sort=-v:refname for reverse chronological sort (newest first by version part of tag name)
     console.log(`Falling back to sorted tag list to find previous tag for ${currentTag}`);
-    const allTagsRaw = getGitCommandOutput(`git tag --sort=-v:refname`);
+    const allTagsRaw = getGitCommandOutput("git", ["tag", "--sort=-v:refname"]);
     if (allTagsRaw.startsWith('ERROR_')) {
         console.warn('Could not list git tags.');
         return undefined;
@@ -271,10 +277,9 @@ export async function generateSingleReleaseNotesData(
     // If previousTag is undefined (first release), and no commits found for currentTag (e.g. initial tag on empty repo or only version commit), return null.
     if (Object.keys(categories).length === 0 && previousTag) {
       console.log(`No user commits found in range ${commitRange}. Release notes might be minimal if only version commit exists.`);
-      // Still proceed to create an entry if it's the first tag, could have a default message or just version/date.
     }
-    if (Object.keys(categories).length === 0 && !previousTag && !versionCommitRegex.test(getGitCommandOutput(`git log -1 --pretty=%s ${currentTag}`))){
-      // Truly no commits for the first tag except maybe the version commit itself.
+    const headCommitMessage = getGitCommandOutput("git", ["log", "-1", "--pretty=%s", currentTag]);
+    if (Object.keys(categories).length === 0 && !previousTag && !versionCommitRegex.test(headCommitMessage)){
       console.log(`No user commits found for the initial tag ${currentTag}.`);
       // Return a minimal entry just with version and date if desired, or null
       // Let's return null to indicate no substantial changes to list for now.
@@ -286,7 +291,7 @@ export async function generateSingleReleaseNotesData(
 
     let tagDate = new Date().toISOString().split('T')[0]; // Default to today
     try {
-        const dateStr = getGitCommandOutput(`git log -1 --format=%cs ${currentTag}`);
+        const dateStr = getGitCommandOutput("git", ["log", "-1", "--format=%cs", currentTag]);
         if (!dateStr.startsWith('ERROR_') && dateStr.trim() !== '') {
             tagDate = dateStr.trim();
         }

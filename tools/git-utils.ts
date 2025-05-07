@@ -1,22 +1,31 @@
-import { execSync } from 'child_process';
+import { spawnSync, SpawnSyncReturns } from 'node:child_process';
 import path from 'path';
 
 /**
  * Executes a Git command and returns its trimmed output.
  * Returns a specific error string if the command fails.
  */
-export function getGitCommandOutput(command: string, allowError: boolean = false): string {
+export function getGitCommandOutput(baseCommand: string, args: string[], allowError: boolean = false): string {
   try {
-    return execSync(command, { encoding: 'utf8' }).trim();
-  } catch (error) {
-    if (allowError) {
-        // When allowed, return empty or a marker but don't log full error here,
-        // let the caller decide based on context.
-        // For now, still returning the marker for consistency with existing code.
-        return "ERROR_EXECUTING_GIT_COMMAND"; 
+    const result: SpawnSyncReturns<string> = spawnSync(baseCommand, args, { encoding: 'utf8' });
+
+    if (result.error) {
+      if (allowError) return "ERROR_SPAWN_FAILED";
+      console.warn(`Execution error with command: ${baseCommand} ${args.join(' ')}`, result.error.message);
+      return "ERROR_SPAWN_FAILED";
     }
-    console.warn(`Git command failed: ${command}`, (error as any).status, (error as any).message);
-    return "ERROR_EXECUTING_GIT_COMMAND";
+
+    if (result.status !== 0) {
+      if (allowError) return "ERROR_COMMAND_FAILED_NON_ZERO_EXIT";
+      console.warn(`Command failed: ${baseCommand} ${args.join(' ')}, Exit code: ${result.status}`, result.stderr?.toString().trim());
+      return "ERROR_COMMAND_FAILED_NON_ZERO_EXIT";
+    }
+
+    return result.stdout.toString().trim();
+  } catch (error) { // This catch is more for unexpected errors during the spawnSync call itself
+    if (allowError) return "ERROR_UNEXPECTED_DURING_SPAWN";
+    console.warn(`Unexpected error executing git command: ${baseCommand} ${args.join(' ')}`, (error as Error).message);
+    return "ERROR_UNEXPECTED_DURING_SPAWN";
   }
 }
 
@@ -24,16 +33,16 @@ export function getGitCommandOutput(command: string, allowError: boolean = false
  * Gets the short hash of the current Git HEAD.
  */
 export function getGitShortHash(): string {
-  const hash = getGitCommandOutput('git rev-parse --short HEAD');
-  return hash === "ERROR_EXECUTING_GIT_COMMAND" ? "unknownhash" : hash;
+  const hash = getGitCommandOutput('git', ['rev-parse', '--short', 'HEAD']);
+  return hash.startsWith("ERROR_") ? "unknownhash" : hash; // Simplified error check
 }
 
 /**
  * Returns '-dirty' if the Git working directory has uncommitted changes or untracked files, otherwise empty string.
  */
 export function getGitDirtySuffix(): string {
-  const statusOutput = getGitCommandOutput('git status --porcelain');
-  if (statusOutput && statusOutput !== "ERROR_EXECUTING_GIT_COMMAND") {
+  const statusOutput = getGitCommandOutput('git', ['status', '--porcelain']);
+  if (statusOutput && !statusOutput.startsWith("ERROR_")) { // Simplified error check
     return '-dirty';
   }
   return '';
@@ -44,17 +53,16 @@ export function getGitDirtySuffix(): string {
  */
 export function getPreviousTag(currentTag: string): string | undefined {
   try {
-    const parentOfCurrentTagCommit = getGitCommandOutput(`git rev-parse ${currentTag}^1`, true); // Allow error for rev-parse
+    const parentOfCurrentTagCommit = getGitCommandOutput("git", ["rev-parse", `${currentTag}^1`], true); // Allow error for rev-parse
     if (!parentOfCurrentTagCommit.startsWith('ERROR_')) {
-        const previousTagAttempt = getGitCommandOutput(`git describe --tags --abbrev=0 ${parentOfCurrentTagCommit}`, true);
+        const previousTagAttempt = getGitCommandOutput("git", ["describe", "--tags", "--abbrev=0", parentOfCurrentTagCommit], true);
         if (!previousTagAttempt.startsWith('ERROR_') && previousTagAttempt !== currentTag) {
             console.log(`Found previous tag ${previousTagAttempt} by describing parent of ${currentTag}`);
             return previousTagAttempt;
         }
     }
-    // Fallback if parent describe failed or wasn't conclusive
     console.log(`Falling back to sorted tag list to find previous tag for ${currentTag}`);
-    const allTagsRaw = getGitCommandOutput(`git tag --sort=-v:refname`);
+    const allTagsRaw = getGitCommandOutput("git", ["tag", "--sort=-v:refname"]);
     if (allTagsRaw.startsWith('ERROR_')) {
         console.warn('Could not list git tags.');
         return undefined;
@@ -69,7 +77,7 @@ export function getPreviousTag(currentTag: string): string | undefined {
     console.log(`No previous tag found in sorted list for ${currentTag}. This might be the first tag.`);
     return undefined;
   } catch (e) {
-    console.warn(`Error finding previous tag for ${currentTag}:`, e);
+    console.warn(`Error finding previous tag for ${currentTag}:`, (e as Error).message);
     return undefined;
   }
 }
@@ -78,7 +86,7 @@ export function getPreviousTag(currentTag: string): string | undefined {
  * Gets the commit hash of the current HEAD.
  */
 export function getCurrentCommitHash(): string | undefined {
-    const hash = getGitCommandOutput('git rev-parse HEAD');
+    const hash = getGitCommandOutput('git', ['rev-parse', 'HEAD']);
     return hash.startsWith('ERROR_') ? undefined : hash;
 }
 
@@ -88,7 +96,7 @@ export function getCurrentCommitHash(): string | undefined {
  * @returns Date string (YYYY-MM-DD) or undefined if not found.
  */
 export function getGitRefDate(ref: string): string | undefined {
-    const dateStr = getGitCommandOutput(`git log -1 --format=%cs ${ref}`);
+    const dateStr = getGitCommandOutput("git", ["log", "-1", "--format=%cs", ref]);
     if (!dateStr.startsWith('ERROR_') && dateStr.trim() !== '') {
         return dateStr.trim();
     }
@@ -100,7 +108,7 @@ export function getGitRefDate(ref: string): string | undefined {
  * Checks if a local tag exists.
  */
 export function getLocalTagCommit(tagName: string): string | undefined {
-    const tagCommit = getGitCommandOutput(`git rev-parse refs/tags/${tagName}`, true);
+    const tagCommit = getGitCommandOutput("git", ["rev-parse", `refs/tags/${tagName}`], true);
     return tagCommit.startsWith('ERROR_') ? undefined : tagCommit;
 }
 
@@ -112,7 +120,7 @@ export function getLocalTagCommit(tagName: string): string | undefined {
  */
 export function gitAdd(filePath: string): void {
   console.log(`Staging file: ${filePath}...`);
-  const result = getGitCommandOutput(`git add "${path.resolve(filePath)}"`); // Use absolute path for safety
+  const result = getGitCommandOutput("git", ["add", path.resolve(filePath)]); 
   if (result.startsWith('ERROR_')) {
     throw new Error(`Failed to stage file ${filePath}. Output: ${result}`);
   }
@@ -125,13 +133,8 @@ export function gitAdd(filePath: string): void {
  */
 export function gitCommit(message: string): void {
   console.log(`Committing with message: "${message}"...`);
-  // Need to escape quotes in the message if execSync passes it through a shell
-  const escapedMessage = message.replace(/"/g, '\\"');
-  const result = getGitCommandOutput(`git commit -m "${escapedMessage}"`);
+  const result = getGitCommandOutput("git", ["commit", "-m", message]);
   if (result.startsWith('ERROR_')) {
-    // 'git commit' can return output even on success, or specific error messages.
-    // A more robust check might be needed if `getGitCommandOutput` doesn't throw on non-zero exit for commits.
-    // However, getGitCommandOutput is designed to return ERROR_EXECUTING_GIT_COMMAND or throw.
     throw new Error(`Failed to commit. Output: ${result}`);
   }
   console.log("Commit successful.");
@@ -143,7 +146,7 @@ export function gitCommit(message: string): void {
  */
 export function gitPush(remote: string = 'origin', branch: string = 'HEAD'): void {
   console.log(`Pushing ${branch} to ${remote}...`);
-  const result = getGitCommandOutput(`git push -u ${remote} ${branch}`);
+  const result = getGitCommandOutput("git", ["push", "-u", remote, branch]);
   if (result.startsWith('ERROR_')) {
     throw new Error(`Failed to push to ${remote} ${branch}. Output: ${result}`);
   }
@@ -156,12 +159,15 @@ export function gitPush(remote: string = 'origin', branch: string = 'HEAD'): voi
  */
 export function gitCreateTag(tagName: string, message?: string, force: boolean = false): void {
   console.log(`Creating tag ${tagName}${force ? ' (forcing)' : ''}...`);
-  let tagCommand = 'git tag';
-  if (force) tagCommand += ' -f';
-  if (message) tagCommand += ` -a "${tagName}" -m "${message.replace(/"/g, '\\"')}"`;
-  else tagCommand += ` "${tagName}"`;
+  const args = ['tag'];
+  if (force) args.push('-f');
+  if (message) {
+    args.push('-a', tagName, '-m', message);
+  } else {
+    args.push(tagName);
+  }
   
-  const result = getGitCommandOutput(tagCommand);
+  const result = getGitCommandOutput("git", args);
   if (result.startsWith('ERROR_')) {
     throw new Error(`Failed to create tag ${tagName}. Output: ${result}`);
   }
@@ -174,7 +180,7 @@ export function gitCreateTag(tagName: string, message?: string, force: boolean =
  */
 export function gitPushTag(tagName: string, remote: string = 'origin'): void {
   console.log(`Pushing tag ${tagName} to ${remote}...`);
-  const result = getGitCommandOutput(`git push ${remote} "${tagName}"`);
+  const result = getGitCommandOutput("git", ["push", remote, tagName]);
   if (result.startsWith('ERROR_')) {
     throw new Error(`Failed to push tag ${tagName} to ${remote}. Output: ${result}`);
   }
@@ -187,10 +193,8 @@ export function gitPushTag(tagName: string, remote: string = 'origin'): void {
  */
 export function gitDeleteLocalTag(tagName: string): void {
   console.log(`Deleting local tag ${tagName}...`);
-  const result = getGitCommandOutput(`git tag -d "${tagName}"`);
+  const result = getGitCommandOutput("git", ["tag", "-d", tagName]);
   if (result.startsWith('ERROR_')) {
-    // Deleting a non-existent tag might be considered an error by git but okay for us.
-    // Check output more carefully if needed. For now, strict error.
     throw new Error(`Failed to delete local tag ${tagName}. Output: ${result}`);
   }
   console.log(`Local tag ${tagName} deleted.`);

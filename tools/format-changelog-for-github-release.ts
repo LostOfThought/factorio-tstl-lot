@@ -5,7 +5,7 @@ import {
   generateSingleReleaseNotesData,
   type VersionEntry,
 } from './changelog-data-service';
-import { execSync } from 'child_process'; // For getting current/latest tag locally
+import { getGitCommandOutput } from './git-utils';
 
 // Output paths
 const markdownChangelogPath = path.resolve(process.cwd(), 'dist', 'changelog.md');
@@ -53,9 +53,14 @@ function formatSingleEntryToMarkdown(entry: VersionEntry | null): string {
 
 function getLatestTagLocally(): string | undefined {
     try {
-        return execSync('git describe --tags --abbrev=0', { encoding: 'utf-8' }).trim();
+        const latestTag = getGitCommandOutput("git", ["describe", "--tags", "--abbrev=0"]);
+        if (latestTag.startsWith("ERROR_")) {
+            console.warn("Could not determine latest tag locally via getGitCommandOutput.");
+            return undefined;
+        }
+        return latestTag;
     } catch (e) {
-        console.warn("Could not determine latest tag locally.", e);
+        console.warn("Error in getLatestTagLocally:", (e as Error).message);
         return undefined;
     }
 }

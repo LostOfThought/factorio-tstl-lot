@@ -1,45 +1,46 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { execSync } from 'child_process';
+// Import necessary functions from the refactored git-utils.ts
+import { 
+    getGitCommandOutput, 
+    getGitDirtySuffix,
+    gitAdd,
+    gitCommit,
+    gitPush,
+    gitCreateTag,
+    gitPushTag,
+    gitDeleteLocalTag,
+    getLocalTagCommit, // For checking if tag exists and points to HEAD
+    getCurrentCommitHash // For getting HEAD commit
+} from './git-utils'; // Assuming git-utils.ts is in the same directory
 
 // --- Git Helper Functions (subset from package-mod.ts) ---
-function getGitCommandOutput(command: string): string {
-  try {
-    return execSync(command, { encoding: 'utf8' }).trim();
-  } catch (error) {
-    return "ERROR_EXECUTING_GIT_COMMAND";
-  }
-}
-
-function getGitDirtySuffix(): string {
-  const statusOutput = getGitCommandOutput('git status --porcelain');
-  if (statusOutput && statusOutput !== "ERROR_EXECUTING_GIT_COMMAND") {
-    return '-dirty';
-  }
-  return '';
-}
+// Removed local getGitCommandOutput and getGitDirtySuffix as they are now imported
 
 function findBaseCommitForVersionSeries(majorMinorPrefix: string): string | null {
   // console.log(`Searching for base commit for version series starting with: ${majorMinorPrefix}`);
   try {
-    const commitsTouchingPackageJson = getGitCommandOutput(`git log --pretty=format:"%H" --follow -- package.json`).split('\n').filter(Boolean);
-    if (!commitsTouchingPackageJson || commitsTouchingPackageJson.length === 0) return null;
+    const commitsTouchingPackageJsonOutput = getGitCommandOutput("git", ["log", "--pretty=format:%H", "--follow", "--", "package.json"]);
+    const commitsTouchingPackageJson = commitsTouchingPackageJsonOutput.split('\n').filter(Boolean);
+    if (commitsTouchingPackageJsonOutput.startsWith("ERROR_") || !commitsTouchingPackageJson || commitsTouchingPackageJson.length === 0) return null;
 
     for (const commitHash of commitsTouchingPackageJson) {
-      const versionAtCommitStr = getGitCommandOutput(`git show ${commitHash}:package.json`);
+      const versionAtCommitStr = getGitCommandOutput("git", ["show", `${commitHash}:package.json`]);
       let versionAtCommit: string | null = null;
-      if (versionAtCommitStr && versionAtCommitStr !== "ERROR_EXECUTING_GIT_COMMAND") {
+      if (versionAtCommitStr && !versionAtCommitStr.startsWith("ERROR_")) {
         try { versionAtCommit = JSON.parse(versionAtCommitStr).version; } catch { /* ignore */ }
       }
       if (!versionAtCommit || typeof versionAtCommit !== 'string') continue;
 
       if (versionAtCommit.startsWith(majorMinorPrefix)) {
-        const parentHashes = getGitCommandOutput(`git rev-parse ${commitHash}^`).split('\n').filter(Boolean);
-        const parentHash = (parentHashes.length > 0 && parentHashes[0] !== "ERROR_EXECUTING_GIT_COMMAND") ? parentHashes[0] : null;
+        const parentHashesOutput = getGitCommandOutput("git", ["rev-parse", `${commitHash}^`]);
+        const parentHashes = parentHashesOutput.split('\n').filter(Boolean);
+        const parentHash = (!parentHashesOutput.startsWith("ERROR_") && parentHashes.length > 0) ? parentHashes[0] : null;
+        
         let versionAtParent: string | null = null;
         if (parentHash) {
-          const versionAtParentStr = getGitCommandOutput(`git show ${parentHash}:package.json`);
-          if (versionAtParentStr && versionAtParentStr !== "ERROR_EXECUTING_GIT_COMMAND") {
+          const versionAtParentStr = getGitCommandOutput("git", ["show", `${parentHash}:package.json`]);
+          if (versionAtParentStr && !versionAtParentStr.startsWith("ERROR_")) {
             try { versionAtParent = JSON.parse(versionAtParentStr).version; } catch { /* ignore */ }
           }
         }
@@ -56,8 +57,11 @@ function findBaseCommitForVersionSeries(majorMinorPrefix: string): string | null
 function countWorkCommitsSince(commitHash: string): number {
     if (!commitHash) return 0;
     try {
-        const commitSubjects = getGitCommandOutput(`git log --pretty=format:%s ${commitHash}..HEAD`).split('\n').filter(Boolean);
-        if (commitSubjects.length === 0 || commitSubjects[0] === "ERROR_EXECUTING_GIT_COMMAND") return 0;
+        const commitSubjectsOutput = getGitCommandOutput("git", ["log", "--pretty=format:%s", `${commitHash}..HEAD`]);
+        if (commitSubjectsOutput.startsWith("ERROR_")) return 0;
+        const commitSubjects = commitSubjectsOutput.split('\n').filter(Boolean);
+
+        if (commitSubjects.length === 0) return 0;
         const versionCommitRegexLocal = /^chore: Update version to \d+\.\d+\.\d+$/;
         return commitSubjects.filter(subject => !versionCommitRegexLocal.test(subject)).length;
     } catch (error) { return 0; }
@@ -77,7 +81,7 @@ type PackageJson = {
  * Outputs the determined version string to stdout on the last line if successful.
  */
 async function manageVersion(packageJsonPath: string, isCiBuild: boolean, isRelease: boolean): Promise<string> {
-  if (getGitDirtySuffix() && !isCiBuild) { // CI builds might run on specific commits that aren't HEAD of a clean checkout
+  if (getGitDirtySuffix() && !isCiBuild) {
     console.error("ERROR: Repository is dirty. Please commit or stash changes before managing version.");
     process.exit(1);
   }
@@ -90,25 +94,40 @@ async function manageVersion(packageJsonPath: string, isCiBuild: boolean, isRele
 
   if (isCiBuild) {
     console.log(`CI Mode: Using existing version ${versionToUse} from ${packageJsonPath}`);
-    // No changes, just output the version
   } else {
-    // Not CI build: Perform version calculation and potential updates
     const currentVersion = packageJson.version;
     const [major, minor] = currentVersion.split('.').map(Number);
     const majorMinorPrefix = `${major}.${minor}.`;
 
     const baseCommitForSeries = findBaseCommitForVersionSeries(majorMinorPrefix);
-    let patchNumber = countWorkCommitsSince(baseCommitForSeries || 'HEAD^'); // Fallback for initial series
-    if (!baseCommitForSeries && patchNumber === 0 && getGitCommandOutput('git rev-list --count HEAD') === '1') {
-        patchNumber = 0; // True initial commit, version should be M.m.0
+    
+    let patchNumber = 0;
+    if (baseCommitForSeries) {
+        patchNumber = countWorkCommitsSince(baseCommitForSeries);
+    } else {
+        // If no base commit for series, it could be the very first series or an error.
+        // Count all commits if no specific series base.
+        const headCommitCountOutput = getGitCommandOutput("git", ["rev-list", "--count", "HEAD"]);
+        const headCommitCount = !headCommitCountOutput.startsWith("ERROR_") ? parseInt(headCommitCountOutput, 10) : 0;
+        if (headCommitCount === 1 && countWorkCommitsSince('HEAD^') === 0) { // Special case for initial commit, M.m.0
+            patchNumber = 0;
+        } else {
+             // Fallback: if no base commit for series, count from beginning of history effectively
+             // This might lead to very large patch numbers if not careful or if repo history is unusual.
+             // Or, assume current major.minor.0 if no base is found.
+             // For now, let's make it count from very first commit (HEAD^) to be consistent with original logic.
+             // if no baseCommitForSeries, count all non-version commits in history.
+             // This seems like the previous logic if baseCommitForSeries was null.
+            patchNumber = countWorkCommitsSince(''); // Empty string to count all from start
+        }
     }
+    
 
     const calculatedVersion = `${major}.${minor}.${patchNumber}`;
 
     const currentParts = currentVersion.split('.').map(Number);
     const calculatedParts = calculatedVersion.split('.').map(Number);
 
-    // Determine if calculated version is actually newer or if current one was set higher manually
     let useCalculated = false;
     if (calculatedParts[0] > currentParts[0]) useCalculated = true;
     else if (calculatedParts[0] === currentParts[0] && calculatedParts[1] > currentParts[1]) useCalculated = true;
@@ -118,7 +137,7 @@ async function manageVersion(packageJsonPath: string, isCiBuild: boolean, isRele
         versionToUse = calculatedVersion;
     } else {
         console.log(`Calculated version (${calculatedVersion}) is not newer than existing version (${currentVersion}). Using existing.`);
-        versionToUse = currentVersion; // Stays as currentVersion
+        versionToUse = currentVersion;
     }
 
     if (packageJson.version !== versionToUse) {
@@ -129,10 +148,11 @@ async function manageVersion(packageJsonPath: string, isCiBuild: boolean, isRele
 
       console.log(`Committing package.json version update to ${versionToUse}...`);
       try {
-        execSync(`git add "${packageJsonFullPath}" && git commit -m "chore: Update version to ${versionToUse}"`);
+        gitAdd(packageJsonFullPath);
+        gitCommit(`chore: Update version to ${versionToUse}`);
         console.log('Committed version update.');
         console.log('Pushing commit...');
-        execSync(`git push -u origin HEAD`); // Assumes current branch is the one to push
+        gitPush(); // Assumes origin and HEAD, adjust if needed
         console.log('Pushed commit.');
       } catch (gitError) {
         console.error(`ERROR: Git operation (commit/push) failed. ${ (gitError as Error).message}`);
@@ -142,28 +162,28 @@ async function manageVersion(packageJsonPath: string, isCiBuild: boolean, isRele
       console.log(`package.json version ${currentVersion} is already up-to-date or manually set higher.`);
     }
 
-    if (isRelease && (packageJsonWasUpdatedByScript || true)) { // Tag if version changed OR if --release and version is current
+    if (isRelease && (packageJsonWasUpdatedByScript || true)) { 
       const tagName = `v${versionToUse}`;
       console.log(`Release mode: Attempting to create and push tag ${tagName}...`);
       try {
-        const localTagExistsOutput = getGitCommandOutput(`git rev-parse refs/tags/${tagName}`);
-        const headCommit = getGitCommandOutput('git rev-parse HEAD');
+        const localTagCommit = getLocalTagCommit(tagName);
+        const headCommit = getCurrentCommitHash();
 
-        if (localTagExistsOutput !== "ERROR_EXECUTING_GIT_COMMAND" && localTagExistsOutput === headCommit) {
+        if (localTagCommit && headCommit && localTagCommit === headCommit) {
           console.log(`Tag ${tagName} already exists locally and points to HEAD. Attempting to push.`);
-        } else if (localTagExistsOutput !== "ERROR_EXECUTING_GIT_COMMAND" && localTagExistsOutput !== headCommit) {
-          console.warn(`Warning: Local tag ${tagName} exists but points to ${localTagExistsOutput.substring(0,7)}, not HEAD (${headCommit.substring(0,7)}). Deleting and re-tagging HEAD.`);
-          execSync(`git tag -d ${tagName}`);
-          execSync(`git tag ${tagName}`);
+        } else if (localTagCommit && headCommit && localTagCommit !== headCommit) {
+          console.warn(`Warning: Local tag ${tagName} exists but points to ${localTagCommit.substring(0,7)}, not HEAD (${headCommit.substring(0,7)}). Deleting and re-tagging HEAD.`);
+          gitDeleteLocalTag(tagName);
+          gitCreateTag(tagName); // Creates a lightweight tag
           console.log(`Re-created local tag ${tagName} on HEAD.`);
         } else {
           console.log(`Creating local tag ${tagName} on HEAD...`);
-          execSync(`git tag ${tagName}`);
+          gitCreateTag(tagName); // Creates a lightweight tag
           console.log(`Successfully created local tag ${tagName}.`);
         }
         
         console.log(`Pushing tag ${tagName} to origin...`);
-        execSync(`git push origin ${tagName}`);
+        gitPushTag(tagName);
         console.log(`Successfully pushed tag ${tagName}.`);
       } catch (gitError) {
         console.error(`ERROR: Failed to ensure tag ${tagName} is on origin. ${(gitError as Error).message}`);
@@ -172,7 +192,7 @@ async function manageVersion(packageJsonPath: string, isCiBuild: boolean, isRele
     }
   }
 
-  console.log(versionToUse); // Output version as the last line
+  console.log(versionToUse); 
   return versionToUse;
 }
 
