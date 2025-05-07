@@ -34,6 +34,9 @@ jobs:
       - name: Build the project for CI Release
         run: pnpm run package:ci
 
+      - name: Format Changelog for GitHub Release
+        run: pnpm vite-node tools/format-changelog-for-github-release.ts
+
       - name: Prepare Release Artifacts
         id: prep_artifacts
         run: |
@@ -73,7 +76,7 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
-          bodyFile: dist/changelog.txt
+          bodyFile: dist/changelog.md
           draft: false
           prerelease: false
 
