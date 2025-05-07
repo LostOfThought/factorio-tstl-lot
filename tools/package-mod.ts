@@ -705,6 +705,56 @@ async function main() {
     await fs.rename(path.resolve(initialDistDir), dynamicBuildFolderPath);
     console.log(`Renamed ./${initialDistDir} to ./${dynamicBuildFolderName}`);
 
+    console.log(`Copying additional Factorio assets from ./src to ${dynamicBuildFolderName}...`);
+
+    // 1. Copy thumbnail.png
+    const srcThumbnailPath = path.resolve(process.cwd(), 'src', 'thumbnail.png');
+    const destThumbnailPath = path.resolve(dynamicBuildFolderPath, 'thumbnail.png');
+    try {
+      await fs.access(srcThumbnailPath); // Check if source exists using fs.access from fs/promises
+      await fs.copyFile(srcThumbnailPath, destThumbnailPath);
+      console.log(`  Copied thumbnail.png to ${destThumbnailPath}`);
+    } catch (error) {
+      // fs.access throws if file doesn't exist or isn't accessible
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        console.log(`  thumbnail.png not found in ./src, skipping.`);
+      } else {
+        // Log other errors but don't necessarily fail the build for optional assets
+        console.warn(`  Warning: Could not copy thumbnail.png: ${(error as Error).message}`);
+      }
+    }
+
+    // 2. Copy standard subfolders
+    const standardSubfolders = ['locale', 'scenarios', 'campaigns', 'tutorials', 'migrations'];
+    for (const subfolder of standardSubfolders) {
+      const srcSubfolderPath = path.resolve(process.cwd(), 'src', subfolder);
+      const destSubfolderPath = path.resolve(dynamicBuildFolderPath, subfolder);
+      try {
+        await fs.access(srcSubfolderPath); // Check if source directory exists
+        const stats = await fs.stat(srcSubfolderPath);
+        if (stats.isDirectory()) {
+          console.log(`  Copying directory ${subfolder} from ${srcSubfolderPath} to ${destSubfolderPath}...`);
+          // Using execSync for recursive copy, consistent with other parts of the script
+          // Ensure paths are quoted if they might contain spaces, though dynamicBuildFolderPath typically won't.
+          execSync(`cp -R "${srcSubfolderPath}" "${destSubfolderPath}"`);
+          console.log(`    Successfully copied ${subfolder}.`);
+        } else {
+          // This case should ideally not happen if fs.access passed and it's not ENOENT
+          // but good to be aware of. If srcSubfolderPath is a file, fs.stat would not throw ENOENT.
+          // console.log(`  Path ./src/${subfolder} exists but is not a directory, skipping.`);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          console.log(`  Subfolder ./${subfolder} not found in ./src, skipping.`);
+        } else {
+          // execSync for cp -R will throw an error on failure, which would be caught by the main try/catch.
+          // This specific catch handles fs.access/fs.stat errors or if we wanted to log other errors distinctly.
+          console.warn(`  Warning: Could not process or copy subfolder ./src/${subfolder}: ${(error as Error).message}`);
+        }
+      }
+    }
+    console.log(`Finished copying additional Factorio assets.`);
+
     // 6. Create releases directory if it doesn't exist
     try { await fs.mkdir(releasesDir, { recursive: true }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     console.log(`Ensured releases directory exists at ${releasesDir}`);

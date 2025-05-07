@@ -20,7 +20,8 @@
     "dev:all": "concurrently -n \"SHARED,SETTINGS,DATA,CONTROL\" -c \"bgBlue.bold,bgGreen.bold,bgYellow.bold,bgMagenta.bold\" --kill-others \"pnpm:dev:shared\" \"pnpm:dev:settings\" \"pnpm:dev:data\" \"pnpm:dev:control\"",
     "dev": "pnpm run dev:all",
     "package": "pnpm vite-node tools/package-mod.ts",
-    "package:ci": "pnpm vite-node tools/package-mod.ts --ci-build"
+    "package:ci": "pnpm vite-node tools/package-mod.ts --ci-build",
+    "release": "pnpm vite-node tools/package-mod.ts --release"
   },
   "author": {
     "name": "Ryan \"LostOfThought\" Wright"
