@@ -25,7 +25,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18" # Or your project's Node.js version
+          node-version: "23" # Or your project's Node.js version
           cache: "pnpm"
 
       - name: Install dependencies
@@ -37,14 +37,8 @@ jobs:
       - name: Prepare Release Artifacts
         id: prep_artifacts
         run: |
-          ARTIFACT_NAME_DEFAULT="project-${{ github.ref_name }}.zip" # Fallback name
-          ARTIFACT_PATH_DEFAULT="./${ARTIFACT_NAME_DEFAULT}" # Fallback path
-
-          ARTIFACT_PATH=""
-          ARTIFACT_NAME="" # Will be set if a valid artifact is found
-
           # Check for the number of .zip files in the releases directory
-          # We expect exactly one, as per user confirmation.
+          # We expect exactly one.
           NUM_ZIPS=$(find releases -maxdepth 1 -name "*.zip" -type f 2>/dev/null | wc -l)
 
           if [ "${NUM_ZIPS}" -eq 1 ]; then
@@ -58,41 +52,28 @@ jobs:
             # Move the found artifact to the current directory for upload
             mv "${SOURCE_ZIP_PATH}" "./${ACTUAL_ARTIFACT_BASENAME}"
             
-            ARTIFACT_PATH="./${ACTUAL_ARTIFACT_BASENAME}"
-            ARTIFACT_NAME="${ACTUAL_ARTIFACT_BASENAME}"
-            echo "Prepared artifact for upload: ${ARTIFACT_NAME}"
+            # Set variables for GitHub output
+            ARTIFACT_PATH_FOR_OUTPUT="./${ACTUAL_ARTIFACT_BASENAME}"
+            ARTIFACT_NAME_FOR_OUTPUT="${ACTUAL_ARTIFACT_BASENAME}"
+            echo "Prepared artifact for upload: ${ARTIFACT_NAME_FOR_OUTPUT}"
+
+            echo "artifact_name=${ARTIFACT_NAME_FOR_OUTPUT}" >> $GITHUB_OUTPUT
+            echo "artifact_path=${ARTIFACT_PATH_FOR_OUTPUT}" >> $GITHUB_OUTPUT
           elif [ "${NUM_ZIPS}" -gt 1 ]; then
-            echo "Error: Multiple .zip files found in releases/ (${NUM_ZIPS} found). Expected only one."
-            echo "Proceeding to create a placeholder artifact."
-            # ARTIFACT_NAME remains empty, will trigger placeholder creation
+            echo "::error::Multiple .zip files found in releases/ (${NUM_ZIPS} found). Expected only one."
+            exit 1
           else # NUM_ZIPS is 0
-            echo "Error: No .zip artifact found in releases/."
-            echo "Proceeding to create a placeholder artifact."
-            # ARTIFACT_NAME remains empty, will trigger placeholder creation
+            echo "::error::No .zip artifact found in releases/. Expected one."
+            exit 1
           fi
-
-          # If ARTIFACT_NAME is still empty, it means no suitable zip was found (or too many).
-          # Fall back to creating a placeholder zip.
-          if [ -z "${ARTIFACT_NAME}" ]; then
-            echo "Creating a placeholder zip of the workspace as a fallback."
-            zip -r "${ARTIFACT_NAME_DEFAULT}" . -x ".git/*" -x ".github/*" -x "node_modules/*" -x "releases/*" # Exclude releases to avoid zipping placeholder
-            ARTIFACT_PATH="${ARTIFACT_PATH_DEFAULT}"
-            ARTIFACT_NAME="${ARTIFACT_NAME_DEFAULT}"
-            echo "Created placeholder artifact: ${ARTIFACT_NAME}"
-          fi
-
-          echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
-          echo "artifact_path=${ARTIFACT_PATH}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: ${{ github.ref_name }} # e.g., v1.0.0
+          tag_name: ${{ github.ref_name }}
           release_name: Release ${{ github.ref_name }}
-          body_path: changelog.txt # Assumes changelog.txt is generated and committed by your release process
+          bodyFile: dist/changelog.txt
           draft: false
           prerelease: false
 
