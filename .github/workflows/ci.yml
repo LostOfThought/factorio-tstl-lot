@@ -1,46 +1,158 @@
-name: Continuous Integration
+name: CI and Release Pipeline
 
 on:
   push:
     branches:
       - main
-    # Avoid triggering on the commit made by the bundle script during release
-    # by checking the commit message or by ignoring paths typically changed by versioning.
-    # Using paths-ignore is often simpler if the version bump commit is predictable.
-    paths-ignore:
-      - 'package.json' # Adjust if your version is in a different file like info.json
-      - 'info.json'    # If you use this for Factorio mod info and version
-      - 'changelog.txt'
+    tags:
+      - "v*" # Trigger on tags like v1.0.0
   pull_request:
     branches:
       - main
-    paths-ignore:
-      - 'package.json'
-      - 'info.json'
-      - 'changelog.txt'
 
 jobs:
-  validate:
-    name: Test, Lint, and Build
+  build_and_test:
+    name: Build, Test, and Package
     runs-on: ubuntu-latest
+    outputs:
+      # These outputs are for the 'release' job to consume
+      RELEASE_ARTIFACT_NAME: ${{ steps.zip_mod_step.outputs.MOD_ZIP_NAME }}
+      RELEASE_ARTIFACT_PATH: ${{ steps.zip_mod_step.outputs.MOD_ZIP_PATH_ON_RUNNER }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Needed for tag-based operations and changelog generation
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v3 # Updated to v3
+        uses: pnpm/action-setup@v3
         with:
-          version: latest # Or your desired pnpm version
+          version: latest
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4 # Updated to v4
+        uses: actions/setup-node@v4
         with:
-          node-version: '18' # Or your project's Node.js version
-          cache: 'pnpm'
+          node-version: "18"
+          cache: "pnpm"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Trial Build
-        run: pnpm run build # Replace with your actual build command
-                           # This build is for validation, not for creating release artifacts. 
+      # == CI Path (Non-Tags: PRs and pushes to main) ==
+      - name: Trial Build (CI)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: pnpm run build # Assuming this covers tests/linting for CI
+
+      # == Release Path (Tags only) ==
+      - name: Determine Version (Release Mode for Tag)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        id: determine_version_release
+        run: |
+          # For a tag build, manage-version --ci-build just confirms the version from package.json
+          # It doesn't change files or do git ops.
+          VERSION_OUTPUT=$(pnpm script:manage-version -- --ci-build)
+          FINAL_VERSION=$(echo "$VERSION_OUTPUT" | tail -n 1)
+          echo "Using version from tag/package.json: $FINAL_VERSION"
+          echo "MOD_VERSION=$FINAL_VERSION" >> $GITHUB_ENV
+          # For changelog generation, packageJsonWasEffectivelyUpdated is false for a tag build
+          echo "VERSION_UPDATED_FLAG=false" >> $GITHUB_ENV
+
+      - name: Read Mod Name (Release Mode)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        id: read_mod_name_release
+        run: |
+          MOD_NAME_FROM_JSON=$(node -p "require('./package.json').name")
+          echo "Read mod name: $MOD_NAME_FROM_JSON"
+          echo "MOD_NAME=$MOD_NAME_FROM_JSON" >> $GITHUB_ENV
+
+      - name: Clean and Prepare Build Directory (Release Mode)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          pnpm rimraf ./dist && mkdir -p ./dist
+          echo "Build directory ./dist cleaned and prepared."
+
+      - name: Compile Lua (Release Mode)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: pnpm run build:all
+
+      - name: Generate info.json (Release Mode)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: pnpm script:generate-info-json ./package.json ./dist
+
+      - name: Generate changelog.txt (Release Mode)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          MOD_VERSION: ${{ env.MOD_VERSION }}
+          VERSION_UPDATED_FLAG: ${{ env.VERSION_UPDATED_FLAG }}
+        run: pnpm script:generate-changelog-txt $MOD_VERSION $VERSION_UPDATED_FLAG ./dist
+
+      - name: Copy Assets (Release Mode)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: pnpm script:copy-assets ./src ./dist
+
+      - name: Zip Mod (Release Mode)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        id: zip_mod_step
+        env:
+          MOD_NAME: ${{ env.MOD_NAME }}
+          MOD_VERSION: ${{ env.MOD_VERSION }}
+        run: |
+          pnpm script:zip-mod ./dist $MOD_NAME $MOD_VERSION ./releases
+          # Output the name and path of the generated zip file for artifact upload
+          ZIP_NAME="${MOD_NAME}_${MOD_VERSION}.zip"
+          ZIP_PATH="./releases/${ZIP_NAME}"
+          echo "MOD_ZIP_NAME=${ZIP_NAME}" >> $GITHUB_OUTPUT
+          echo "MOD_ZIP_PATH_ON_RUNNER=${ZIP_PATH}" >> $GITHUB_OUTPUT
+          echo "Created mod zip: ${ZIP_PATH}"
+
+      - name: Format Changelog for GitHub Release Notes (Release Mode)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: pnpm run release:github-changelog # This creates dist/changelog.md
+
+      # Upload artifacts for the 'release' job (only on tags)
+      - name: Upload Mod Zip Artifact (Release Mode)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.zip_mod_step.outputs.MOD_ZIP_NAME }} # Dynamic name from zipping step
+          path: ${{ steps.zip_mod_step.outputs.MOD_ZIP_PATH_ON_RUNNER }}
+          retention-days: 1
+
+      - name: Upload GitHub Changelog.md Artifact (Release Mode)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: github-changelog-for-release # Fixed name for this artifact bundle
+          path: dist/changelog.md # Path from release:github-changelog script
+          retention-days: 1
+
+  release:
+    name: Create GitHub Release
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: build_and_test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Mod Zip Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build_and_test.outputs.RELEASE_ARTIFACT_NAME }}
+          # This will download the file (e.g., mod-v1.0.0.zip) to the current working directory.
+
+      - name: Download GitHub Changelog.md Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: github-changelog-for-release
+          # This will download changelog.md to the current working directory.
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          bodyFile: changelog.md # Path to the downloaded changelog file
+          artifacts: ${{ needs.build_and_test.outputs.RELEASE_ARTIFACT_NAME }} # The name of the downloaded .zip file
+          artifactContentType: application/zip
+          token: ${{ secrets.GITHUB_TOKEN }}
