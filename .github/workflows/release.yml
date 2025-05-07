@@ -35,7 +35,7 @@ jobs:
         run: pnpm run package:ci
 
       - name: Format Changelog for GitHub Release
-        run: pnpm vite-node tools/format-changelog-for-github-release.ts
+        run: pnpm run release:github-changelog
 
       - name: Prepare Release Artifacts
         id: prep_artifacts

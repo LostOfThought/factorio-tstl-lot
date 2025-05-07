@@ -21,7 +21,8 @@
     "dev": "pnpm run dev:all",
     "package": "pnpm vite-node tools/package-mod.ts",
     "package:ci": "pnpm vite-node tools/package-mod.ts --ci-build",
-    "release": "pnpm vite-node tools/package-mod.ts --release"
+    "release": "pnpm vite-node tools/package-mod.ts --release",
+    "release:github-changelog": "pnpm vite-node tools/format-changelog-for-github-release.ts"
   },
   "author": {
     "name": "Ryan \"LostOfThought\" Wright"
