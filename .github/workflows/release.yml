@@ -71,8 +71,8 @@ jobs:
         id: create_release
         uses: ncipollo/release-action@v1
         with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
+          tag: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
           bodyFile: dist/changelog.txt
           draft: false
           prerelease: false
