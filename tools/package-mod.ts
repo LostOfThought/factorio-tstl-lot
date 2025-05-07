@@ -212,13 +212,22 @@ async function main() {
 
     if (isGitHubActions) {
       const zipFileName = `${currentModName}_${finalModVersion}.zip`;
-      // path.join will normalize. We want explicitly like './releases/file.zip'
       const zipFilePath = `.${path.sep}${path.join(releasesDir, zipFileName)}`; 
       console.log(`Setting GITHUB_OUTPUT MOD_ZIP_NAME=${zipFileName}`);
       console.log(`Setting GITHUB_OUTPUT MOD_ZIP_PATH_ON_RUNNER=${zipFilePath}`);
-      // Ensure these are the last ::set-output commands or not interleaved with other ::group:: commands before this group ends.
-      process.stdout.write(`::set-output name=MOD_ZIP_NAME::${zipFileName}\n`);
-      process.stdout.write(`::set-output name=MOD_ZIP_PATH_ON_RUNNER::${zipFilePath}\n`);
+      
+      // Use GITHUB_OUTPUT environment file for setting outputs
+      if (process.env.GITHUB_OUTPUT) {
+        try {
+          await fs.appendFile(process.env.GITHUB_OUTPUT, `MOD_ZIP_NAME=${zipFileName}\n`);
+          await fs.appendFile(process.env.GITHUB_OUTPUT, `MOD_ZIP_PATH_ON_RUNNER=${zipFilePath}\n`);
+        } catch (e) {
+          console.error("Failed to write to GITHUB_OUTPUT file:", e);
+          // Fallback or error handling if needed, though the action might fail anyway if GITHUB_OUTPUT is not writable
+        }
+      } else {
+        console.warn("GITHUB_OUTPUT environment variable not found. Cannot set outputs for subsequent steps.");
+      }
       console.log("::endgroup::"); // End the "Packaging Summary" group
     }
 
