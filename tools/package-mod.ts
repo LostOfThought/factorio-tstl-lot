@@ -202,8 +202,25 @@ async function main() {
     }
     logSummary("--- Mod Zipping Complete ---");
 
+    // Start a new group for final outputs if in GitHub Actions
+    if (isGitHubActions) {
+      console.log("::group::--- Packaging Summary and Artifact Info ---");
+    }
+
     console.log(`Successfully packaged mod ${currentModName} v${finalModVersion}`);
-    console.log("Output should be in the ./releases directory.");
+    console.log(`Output should be in the ./${releasesDir} directory.`);
+
+    if (isGitHubActions) {
+      const zipFileName = `${currentModName}_${finalModVersion}.zip`;
+      // path.join will normalize. We want explicitly like './releases/file.zip'
+      const zipFilePath = `.${path.sep}${path.join(releasesDir, zipFileName)}`; 
+      console.log(`Setting GITHUB_OUTPUT MOD_ZIP_NAME=${zipFileName}`);
+      console.log(`Setting GITHUB_OUTPUT MOD_ZIP_PATH_ON_RUNNER=${zipFilePath}`);
+      // Ensure these are the last ::set-output commands or not interleaved with other ::group:: commands before this group ends.
+      process.stdout.write(`::set-output name=MOD_ZIP_NAME::${zipFileName}\n`);
+      process.stdout.write(`::set-output name=MOD_ZIP_PATH_ON_RUNNER::${zipFilePath}\n`);
+      console.log("::endgroup::"); // End the "Packaging Summary" group
+    }
 
   } catch (error) {
     if (isGitHubActions) {

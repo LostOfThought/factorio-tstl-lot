@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       # These outputs are for the 'release' job to consume
-      RELEASE_ARTIFACT_NAME: ${{ steps.zip_mod_step.outputs.MOD_ZIP_NAME }}
-      RELEASE_ARTIFACT_PATH: ${{ steps.zip_mod_step.outputs.MOD_ZIP_PATH_ON_RUNNER }}
+      RELEASE_ARTIFACT_NAME: ${{ steps.package_script_step.outputs.MOD_ZIP_NAME }}
+      RELEASE_ARTIFACT_PATH: ${{ steps.package_script_step.outputs.MOD_ZIP_PATH_ON_RUNNER }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -39,83 +39,31 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # == CI Path (Non-Tags: PRs and pushes to main) ==
-      - name: Trial Build (CI)
+      - name: Build and Package (CI / Non-Release)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        run: pnpm run build # Assuming this covers tests/linting for CI
+        run: pnpm vite-node tools/package-mod.ts --ci-build
 
       # == Release Path (Tags only) ==
-      - name: Determine Version (Release Mode for Tag)
+      - name: Build, Package, and Prepare Release Assets (Release Mode for Tag)
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        id: determine_version_release
-        run: |
-          # For a tag build, manage-version --ci-build just confirms the version from package.json
-          # It doesn't change files or do git ops.
-          VERSION_OUTPUT=$(pnpm script:manage-version -- --ci-build)
-          FINAL_VERSION=$(echo "$VERSION_OUTPUT" | tail -n 1)
-          echo "Using version from tag/package.json: $FINAL_VERSION"
-          echo "MOD_VERSION=$FINAL_VERSION" >> $GITHUB_ENV
-          # For changelog generation, packageJsonWasEffectivelyUpdated is false for a tag build
-          echo "VERSION_UPDATED_FLAG=false" >> $GITHUB_ENV
-
-      - name: Read Mod Name (Release Mode)
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        id: read_mod_name_release
-        run: |
-          MOD_NAME_FROM_JSON=$(node -p "require('./package.json').name")
-          echo "Read mod name: $MOD_NAME_FROM_JSON"
-          echo "MOD_NAME=$MOD_NAME_FROM_JSON" >> $GITHUB_ENV
-
-      - name: Clean and Prepare Build Directory (Release Mode)
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        run: |
-          pnpm rimraf ./dist && mkdir -p ./dist
-          echo "Build directory ./dist cleaned and prepared."
-
-      - name: Compile Lua (Release Mode)
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        run: pnpm run build:all
-
-      - name: Generate info.json (Release Mode)
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        run: pnpm script:generate-info-json ./package.json ./dist
-
-      - name: Generate changelog.txt (Release Mode)
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        env:
-          MOD_VERSION: ${{ env.MOD_VERSION }}
-          VERSION_UPDATED_FLAG: ${{ env.VERSION_UPDATED_FLAG }}
-        run: pnpm script:generate-changelog-txt $MOD_VERSION $VERSION_UPDATED_FLAG ./dist
-
-      - name: Copy Assets (Release Mode)
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        run: pnpm script:copy-assets ./src ./dist
-
-      - name: Zip Mod (Release Mode)
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        id: zip_mod_step
-        env:
-          MOD_NAME: ${{ env.MOD_NAME }}
-          MOD_VERSION: ${{ env.MOD_VERSION }}
-        run: |
-          pnpm script:zip-mod ./dist $MOD_NAME $MOD_VERSION ./releases
-          # Output the name and path of the generated zip file for artifact upload
-          ZIP_NAME="${MOD_NAME}_${MOD_VERSION}.zip"
-          ZIP_PATH="./releases/${ZIP_NAME}"
-          echo "MOD_ZIP_NAME=${ZIP_NAME}" >> $GITHUB_OUTPUT
-          echo "MOD_ZIP_PATH_ON_RUNNER=${ZIP_PATH}" >> $GITHUB_OUTPUT
-          echo "Created mod zip: ${ZIP_PATH}"
+        id: package_script_step # ID for referencing outputs
+        run: pnpm vite-node tools/package-mod.ts --ci-build
+        # The --ci-build flag tells package-mod.ts to use the current version
+        # (from package.json, which should match the tag) and not perform git operations.
+        # It will handle all steps: version check, clean, build, info.json, changelog.txt, assets, zip.
+        # It will also output MOD_ZIP_NAME and MOD_ZIP_PATH_ON_RUNNER via ::set-output.
 
       - name: Format Changelog for GitHub Release Notes (Release Mode)
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        run: pnpm run release:github-changelog # This creates dist/changelog.md
+        run: pnpm run release:github-changelog # This creates dist/changelog.md from dist/changelog.txt
 
       # Upload artifacts for the 'release' job (only on tags)
       - name: Upload Mod Zip Artifact (Release Mode)
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.zip_mod_step.outputs.MOD_ZIP_NAME }} # Dynamic name from zipping step
-          path: ${{ steps.zip_mod_step.outputs.MOD_ZIP_PATH_ON_RUNNER }}
+          name: ${{ steps.package_script_step.outputs.MOD_ZIP_NAME }} # Dynamic name from package_script_step
+          path: ${{ steps.package_script_step.outputs.MOD_ZIP_PATH_ON_RUNNER }}
           retention-days: 1
 
       - name: Upload GitHub Changelog.md Artifact (Release Mode)
