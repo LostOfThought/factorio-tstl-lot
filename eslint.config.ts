@@ -92,7 +92,7 @@ export default tseslint.config(
       // Stylistic rules
       ...stylistic.configs.customize({
         indent: 2,
-        quotes: "backtick",
+        quotes: "single",
         semi: true,
       }).rules,
       "@stylistic/type-generic-spacing": "error",
@@ -231,7 +231,7 @@ export default tseslint.config(
 
   // Configuration for eslint.config.ts
   {
-    files: ["eslint.config.ts"],
+    files: ["eslint.config.js", "eslint.config.ts"],
     languageOptions: {
       // Ensure a tsconfig.json exists in the tools directory or adjust path
       parserOptions: { project: "./tsconfig.eslint.json" },

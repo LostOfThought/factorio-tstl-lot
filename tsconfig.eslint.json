@@ -1,11 +1,13 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "checkJs": true,
     "types": ["lua-types/5.2", "typed-factorio/settings"],
-    "rootDir": "./src/settings"
+    "rootDir": "./"
   },
   "include": [
-    "./src/settings/**/*.ts"
+    "./eslint.config.ts",
+    "./eslint.config.js",
   ],
   "exclude": [],
 } 
