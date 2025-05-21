@@ -1,7 +1,8 @@
-import fs from 'fs/promises';
-import path from 'path';
+import { createWriteStream } from 'node:fs'; // Use fs.createWriteStream for the archive output
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
 import archiver from 'archiver';
-import { createWriteStream } from 'fs'; // Use fs.createWriteStream for the archive output
 
 async function zipMod(folderToZipPath: string, modName: string, modVersion: string, releasesOutputDir: string): Promise<void> {
   console.log(`Preparing to zip folder: ${folderToZipPath} as ${modName} v${modVersion} using archiver`);
@@ -13,7 +14,8 @@ async function zipMod(folderToZipPath: string, modName: string, modVersion: stri
   try {
     await fs.mkdir(absoluteReleasesDir, { recursive: true });
     console.log(`Ensured releases directory exists at ${absoluteReleasesDir}`);
-  } catch (error) {
+  }
+  catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
       console.error(`Error creating releases directory ${absoluteReleasesDir}:`, error);
       throw error;
@@ -23,10 +25,11 @@ async function zipMod(folderToZipPath: string, modName: string, modVersion: stri
   try {
     await fs.unlink(absoluteZipFilePath);
     console.log(`Removed existing zip file: ${absoluteZipFilePath}`);
-  } catch (error) {
+  }
+  catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       console.error(`Error removing existing zip file ${absoluteZipFilePath}:`, error);
-      throw error; 
+      throw error;
     }
   }
 
@@ -34,7 +37,7 @@ async function zipMod(folderToZipPath: string, modName: string, modVersion: stri
 
   const output = createWriteStream(absoluteZipFilePath);
   const archive = archiver('zip', {
-    zlib: { level: 9 } // Sets the compression level.
+    zlib: { level: 9 }, // Sets the compression level.
   });
 
   return new Promise<void>((resolve, reject) => {
@@ -46,8 +49,9 @@ async function zipMod(folderToZipPath: string, modName: string, modVersion: stri
 
     archive.on('warning', (err) => {
       if (err.code === 'ENOENT') {
-        console.warn('Archiver warning: ', err);
-      } else {
+        console.warn('Archiver warning:', err);
+      }
+      else {
         reject(err);
       }
     });
@@ -73,7 +77,7 @@ async function zipMod(folderToZipPath: string, modName: string, modVersion: stri
     // And then copied ./dist contents into it.
     // The zip-mod.ts is called with folderToZipPath = temp_zip_staging/modName_version-hash/
     // We want the *contents* of this folder to be zipped under a root folder that IS modName_version-hash
-    
+
     // Correct approach for archiver:
     // To make `modName_version-hash` the root folder in the zip, containing all files:
     archive.directory(folderToZipPath, path.basename(folderToZipPath));
@@ -85,8 +89,8 @@ async function zipMod(folderToZipPath: string, modName: string, modVersion: stri
 async function run(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length < 4) {
-    console.error("Usage: pnpm vite-node tools/zip-mod.ts <path_to_folder_to_zip> <modName> <modVersion> <releasesOutputDir>");
-    console.error("Example: pnpm vite-node tools/zip-mod.ts ./temp_build_for_zip/my-mod_1.0.0-abcdef my-mod 1.0.0 ./releases");
+    console.error('Usage: pnpm vite-node tools/zip-mod.ts <path_to_folder_to_zip> <modName> <modVersion> <releasesOutputDir>');
+    console.error('Example: pnpm vite-node tools/zip-mod.ts ./temp_build_for_zip/my-mod_1.0.0-abcdef my-mod 1.0.0 ./releases');
     process.exit(1);
   }
   const folderToZipPathArg = path.resolve(args[0]);
@@ -96,10 +100,11 @@ async function run(): Promise<void> {
 
   try {
     await zipMod(folderToZipPathArg, modNameArg, modVersionArg, releasesOutputDirArg);
-  } catch (error) {
-    console.error("Error during mod zipping:", error);
+  }
+  catch (error) {
+    console.error('Error during mod zipping:', error);
     process.exit(1);
   }
 }
 
-run(); 
+run();

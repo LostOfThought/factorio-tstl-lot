@@ -1,32 +1,32 @@
-import fs from 'fs/promises';
-import path from 'path';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 // Type definitions (these should ideally be shared if used by multiple tools)
-type FactorioDlcRequirementsConfig = {
+interface FactorioDlcRequirementsConfig {
   quality_required?: boolean;
   space_travel_required?: boolean;
   spoiling_required?: boolean;
   freezing_required?: boolean;
   segmented_units_required?: boolean;
   expansion_shaders_required?: boolean;
-};
+}
 
-type FactorioPackageConfig = {
+interface FactorioPackageConfig {
   factorio_version?: string;
   title?: string;
   contact?: string;
   homepage?: string;
   dependencies?: string[];
   dlc?: FactorioDlcRequirementsConfig;
-};
+}
 
-type AuthorObject = {
+interface AuthorObject {
   name?: string;
   email?: string;
   url?: string;
-};
+}
 
-type PackageJson = {
+interface PackageJson {
   name: string;
   version: string;
   author?: string | AuthorObject;
@@ -38,9 +38,9 @@ type PackageJson = {
   } | string;
   factorio?: FactorioPackageConfig;
   [key: string]: any;
-};
+}
 
-type InfoJson = {
+interface InfoJson {
   name: string;
   version: string;
   title: string;
@@ -56,13 +56,13 @@ type InfoJson = {
   freezing_required?: boolean;
   segmented_units_required?: boolean;
   expansion_shaders_required?: boolean;
-};
+}
 
-const DEFAULT_FACTORIO_VERSION = "1.1";
+const DEFAULT_FACTORIO_VERSION = '1.1';
 
 async function generateInfoJson(packageJsonPath: string, outputDir: string): Promise<void> {
   console.log(`Reading package.json from: ${packageJsonPath}`);
-  const packageJsonContent = await fs.readFile(packageJsonPath, 'utf-8');
+  const packageJsonContent = await fs.readFile(packageJsonPath, 'utf8');
   const packageJson = JSON.parse(packageJsonContent) as PackageJson;
 
   const modName = packageJson.name;
@@ -74,10 +74,11 @@ async function generateInfoJson(packageJsonPath: string, outputDir: string): Pro
   let contactString: string | undefined = undefined;
 
   if (typeof packageJson.author === 'object' && packageJson.author !== null) {
-    const authorObj = packageJson.author as AuthorObject;
+    const authorObj = packageJson.author;
     authorString = authorObj.name || authorString;
     contactString = authorObj.email;
-  } else if (typeof packageJson.author === 'string') {
+  }
+  else if (typeof packageJson.author === 'string') {
     authorString = packageJson.author;
   }
 
@@ -104,7 +105,7 @@ async function generateInfoJson(packageJsonPath: string, outputDir: string): Pro
     contact: contactString,
     homepage: homepageString,
     dependencies: factorioConfig.dependencies || [`base >= ${factorioVersion}`],
-    ...(factorioConfig.dlc || {}),
+    ...factorioConfig.dlc,
   };
 
   // Clean up undefined optional fields from infoJsonData
@@ -123,8 +124,8 @@ async function generateInfoJson(packageJsonPath: string, outputDir: string): Pro
 async function run(): Promise<void> {
   const args = process.argv.slice(2); // Exclude 'node' and script path
   if (args.length < 2) {
-    console.error("Usage: pnpm vite-node tools/generate-info-json.ts <path/to/package.json> <output/directory>");
-    console.error("Example: pnpm vite-node tools/generate-info-json.ts ./package.json ./dist");
+    console.error('Usage: pnpm vite-node tools/generate-info-json.ts <path/to/package.json> <output/directory>');
+    console.error('Example: pnpm vite-node tools/generate-info-json.ts ./package.json ./dist');
     process.exit(1);
   }
   const packageJsonPathArg = path.resolve(args[0]);
@@ -132,10 +133,11 @@ async function run(): Promise<void> {
 
   try {
     await generateInfoJson(packageJsonPathArg, outputDirArg);
-  } catch (error) {
-    console.error("Error during info.json generation:", error);
+  }
+  catch (error) {
+    console.error('Error during info.json generation:', error);
     process.exit(1);
   }
 }
 
-run(); 
+run();

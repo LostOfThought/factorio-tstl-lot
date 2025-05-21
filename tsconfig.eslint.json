@@ -2,7 +2,6 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "checkJs": true,
-    "types": ["lua-types/5.2", "typed-factorio/settings"],
     "rootDir": "./"
   },
   "include": [
