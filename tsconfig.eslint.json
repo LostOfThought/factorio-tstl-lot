@@ -1,12 +1,26 @@
 {
-  "extends": "./tsconfig.json",
   "compilerOptions": {
-    "checkJs": true,
-    "rootDir": "./"
+    "target": "ESNext",
+    "lib": ["ESNext"],
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "strict": true,
+    "erasableSyntaxOnly": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowJs": false,
+    "exactOptionalPropertyTypes": true,
+    "declaration": false,
+    "rootDir": "./",
+    "noErrorTruncation": true,
+    "noImplicitAny": true,
+    "strictPropertyInitialization": true
   },
   "include": [
-    "./eslint.config.ts",
-    "./eslint.config.js",
+    "./eslint.config.ts"
   ],
-  "exclude": [],
+  "exclude": [
+    "node_modules"
+  ]
 } 

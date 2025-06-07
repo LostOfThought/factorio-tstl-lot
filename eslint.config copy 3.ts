@@ -1,7 +1,6 @@
 // eslint-disable jsdoc/no-missing-syntax, jsdoc/require-file-overview -- Know config file
 import eslintCommentsPlugin from '@eslint-community/eslint-plugin-eslint-comments';
 import stylistic from '@stylistic/eslint-plugin';
-import dependPlugin from 'eslint-plugin-depend';
 import etcPlugin from 'eslint-plugin-etc';
 import functionalPlugin from 'eslint-plugin-functional';
 import importNewlinesPlugin from 'eslint-plugin-import-newlines';
@@ -19,26 +18,9 @@ import sonarjsPlugin from 'eslint-plugin-sonarjs';
 import tsdocPlugin from 'eslint-plugin-tsdoc';
 import unicornPlugin from 'eslint-plugin-unicorn';
 import unusedImportsPlugin from 'eslint-plugin-unused-imports';
-import writeGoodCommentsPlugin from 'eslint-plugin-write-good-comments';
 import globalsImport from 'globals';
 import tseslint from 'typescript-eslint';
-import brettz9Plugin from '@brettz9/eslint-plugin';
-
-// eslint-disable-next-line no-warning-comments -- TODOs
-/*
- * IMPORTANT: Remove the following TODOs when completed
- * TODO: @brettz9/eslint-plugin
- * TODO: eslint-plugin-de-morgan
- * TODO: eslint-plugin-code-complete
- * TODO: eslint-plugin-es-x
- * TODO: eslint-plugin-misc
- * TODO: https://github.com/dustinspecker/awesome-eslint?tab=readme-ov-file#practices-and-specific-es-features
- * TODO: https://github.com/dustinspecker/awesome-eslint?tab=readme-ov-file#security
- * TODO: https://github.com/dustinspecker/awesome-eslint?tab=readme-ov-file#style
- * TODO: https://github.com/dustinspecker/awesome-eslint?tab=readme-ov-file#testing-tools
- * TODO: https://github.com/dustinspecker/awesome-eslint?tab=readme-ov-file#globals
- * TODO: https://github.com/dustinspecker/awesome-eslint?tab=readme-ov-file#tools
- */
+import writeGoodCommentsPlugin from 'eslint-plugin-write-good-comments';
 
 import type { ESLint } from 'eslint';
 import type { ReadonlyDeep } from 'type-fest';
@@ -737,9 +719,6 @@ const baseRules = asReadOnlyDeep({
   '@typescript-eslint/unbound-method': 'error',
   '@typescript-eslint/unified-signatures': 'error',
   '@typescript-eslint/use-unknown-in-catch-callback-variable': 'error',
-  'depend/ban-dependencies': ['error', {
-    presets: ['native', 'microutilities', 'preferred'],
-  }],
   'functional/functional-parameters': ['error', {
     allowArgumentsKeyword: false,
     allowRestParameter: false,
@@ -1268,27 +1247,11 @@ const baseRules = asReadOnlyDeep({
       varsIgnorePattern: '^_',
     },
   ],
-  'write-good-comments/write-good-comments': [
-    'error',
-    {
-      adverb: true,
-      cliches: true,
-      eprime: true,
-      illusion: true,
-      passive: true,
-      so: true,
-      thereIs: true,
-      tooWordy: true,
-      weasel: true,
-      whitelist: ['read-only'],
-    },
-  ],
 } as const);
 
 const basePlugins = asReadOnlyDeep({
   '@eslint-community/eslint-comments': asPlugin(eslintCommentsPlugin),
   '@stylistic': stylistic,
-  'depend': dependPlugin,
   'etc': asPlugin(etcPlugin),
   'functional': asPlugin(functionalPlugin),
   'import-newlines': asPlugin(importNewlinesPlugin),
@@ -1305,7 +1268,7 @@ const basePlugins = asReadOnlyDeep({
   'tsdoc': tsdocPlugin,
   'unicorn': unicornPlugin,
   'unused-imports': unusedImportsPlugin,
-  'write-good-comments': asPlugin(writeGoodCommentsPlugin),
+  'write-good-comments': writeGoodCommentsPlugin,
 } as const);
 
 const baseSettings = asReadOnlyDeep({

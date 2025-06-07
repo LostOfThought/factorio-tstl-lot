@@ -12,6 +12,10 @@
     "declaration": false,
     "rootDir": "./src",
     "types": ["lua-types/5.2"],
+    "noErrorTruncation": true,
+    "verbatimModuleSyntax": true,
+    "noImplicitAny": true,
+    "strictPropertyInitialization": true,
   },
   "tstl": {
     "buildMode": "library",
